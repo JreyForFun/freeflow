@@ -1,0 +1,47 @@
+# Expo / React Native
+node_modules/
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Android
+android/
+ios/
+
+# EAS
+.eas/
+
+# Native build artifacts
+*.ipa
+*.apk
+*.aab
+
+# AI model files (too large for git)
+assets/models/
+*.gguf
+stitch_freeflow_ai_scheduler
+
+# Env files
+.env
+.env.local
+.env.development
+.env.production
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# TypeScript
+*.tsbuildinfo
