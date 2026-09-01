@@ -170,7 +170,7 @@ export default function HubScreen() {
   const [makerVisible, setMakerVisible] = useState(false);
   const [userTemplates, setUserTemplates] = useState<Template[]>([]);
   const [toast, setToast] = useState('');
-  const [applyDialog, setApplyDialog] = useState<{ name: string; blocks: TemplateBlock[] } | null>(null);
+  const [templatePreview, setTemplatePreview] = useState<{ name: string; description?: string; icon?: string; blocks: TemplateBlock[] } | null>(null);
   const [deleteDialog, setDeleteDialog] = useState<Template | null>(null);
 
   // Template maker state
@@ -209,7 +209,7 @@ export default function HubScreen() {
     } catch (e) {
       showToast('Error applying template');
     }
-    setApplyDialog(null);
+    setTemplatePreview(null);
   }, [showToast]);
 
   // ── Import ICS ─────────────────────────────────────────────────────────────
@@ -296,7 +296,7 @@ export default function HubScreen() {
           <TouchableOpacity
             key={tpl.id}
             style={[styles.card, { borderColor: colors.outlineVariant, backgroundColor: colors.surfaceContainerLowest }]}
-            onPress={() => setApplyDialog({ name: tpl.name, blocks: tpl.blocks as TemplateBlock[] })}
+            onPress={() => setTemplatePreview({ name: tpl.name, description: tpl.description, icon: tpl.icon, blocks: tpl.blocks as TemplateBlock[] })}
             activeOpacity={0.85}
           >
             <View style={[styles.iconWrap, { backgroundColor: colors.surfaceContainer, borderColor: colors.outlineVariant }]}>
@@ -330,9 +330,9 @@ export default function HubScreen() {
                 </View>
                 <TouchableOpacity
                   style={[styles.pill, { backgroundColor: colors.primary }]}
-                  onPress={() => setApplyDialog({ name: tpl.name, blocks: tpl.blocks })}
+                  onPress={() => setTemplatePreview({ name: tpl.name, blocks: tpl.blocks })}
                 >
-                  <LabelSm color={colors.onPrimary}>Apply</LabelSm>
+                  <LabelSm color={colors.onPrimary}>Preview</LabelSm>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.pill, { backgroundColor: 'transparent', borderWidth: 1, borderColor: `${colors.error}55` }]}
@@ -400,17 +400,67 @@ export default function HubScreen() {
         </View>
       </BottomSheet>
 
-      {/* Apply confirmation */}
-      <Dialog
-        visible={!!applyDialog}
-        title={`Apply "${applyDialog?.name}"?`}
-        message={`Adds ${applyDialog?.blocks.length ?? 0} time blocks to today's schedule. Already-existing blocks are skipped.`}
-        actions={[
-          { label: 'Cancel', onPress: () => setApplyDialog(null) },
-          { label: 'Apply', primary: true, onPress: () => applyDialog && applyTemplate(applyDialog.blocks) },
-        ]}
-        onDismiss={() => setApplyDialog(null)}
-      />
+      {/* Template preview bottom sheet */}
+      <BottomSheet visible={!!templatePreview} onClose={() => setTemplatePreview(null)} maxHeightRatio={0.82}>
+        <View style={styles.previewHeader}>
+          {templatePreview?.icon ? (
+            <View style={[styles.iconWrap, { backgroundColor: colors.surfaceContainer, borderColor: colors.outlineVariant }]}>
+              <MaterialCommunityIcons name={templatePreview.icon as any} size={22} color={colors.primary} />
+            </View>
+          ) : null}
+          <View style={{ flex: 1 }}>
+            <HeadlineMd style={{ fontSize: 20 }}>{templatePreview?.name}</HeadlineMd>
+            {templatePreview?.description ? (
+              <LabelSm color={colors.onSurfaceVariant}>{templatePreview.description}</LabelSm>
+            ) : null}
+          </View>
+          <TouchableOpacity onPress={() => setTemplatePreview(null)} style={[styles.closeBtn, { backgroundColor: colors.surfaceContainerHigh }]}>
+            <MaterialCommunityIcons name="close" size={18} color={colors.onSurfaceVariant} />
+          </TouchableOpacity>
+        </View>
+
+        <LabelSm color={colors.onSurfaceVariant} style={{ marginBottom: spacing.sm, textTransform: 'uppercase', letterSpacing: 1 }}>
+          {templatePreview?.blocks.length ?? 0} time blocks — today
+        </LabelSm>
+
+        <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 340 }}>
+          {templatePreview?.blocks.map((block, i) => (
+            <View
+              key={i}
+              style={[styles.previewBlock, { backgroundColor: colors.surfaceContainerLow, borderColor: colors.outlineVariant }]}
+            >
+              <View style={[styles.previewAccent, { backgroundColor: colors.primary }]} />
+              <View style={{ flex: 1 }}>
+                <LabelMd color={colors.onSurface}>{block.title}</LabelMd>
+                <LabelSm color={colors.onSurfaceVariant}>
+                  {block.start}{block.end ? ` → ${block.end}` : ''}
+                </LabelSm>
+              </View>
+              <View style={[styles.catTag, { backgroundColor: `${colors.primary}18`, borderColor: `${colors.primary}30` }]}>
+                <MaterialCommunityIcons
+                  name={(CATEGORY_ICONS[block.category] ?? 'circle-outline') as any}
+                  size={12}
+                  color={colors.primary}
+                />
+                <LabelSm color={colors.primary} style={{ fontSize: 10 }}>{block.category}</LabelSm>
+              </View>
+            </View>
+          ))}
+        </ScrollView>
+
+        <View style={[styles.makerFooter, { borderTopColor: colors.outlineVariant, marginTop: spacing.md }]}>
+          <TouchableOpacity style={styles.cancelBtn} onPress={() => setTemplatePreview(null)}>
+            <LabelMd color={colors.onSurfaceVariant}>Cancel</LabelMd>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.saveBtn, { backgroundColor: colors.primary }]}
+            onPress={() => templatePreview && applyTemplate(templatePreview.blocks)}
+          >
+            <MaterialCommunityIcons name="plus" size={16} color={colors.onPrimary} />
+            <LabelMd color={colors.onPrimary}>Add to Today</LabelMd>
+          </TouchableOpacity>
+        </View>
+      </BottomSheet>
 
       {/* Delete user template confirmation */}
       <Dialog
@@ -536,5 +586,36 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
     paddingHorizontal: spacing.md,
     borderRadius: radius.default,
+  },
+
+  // Preview sheet
+  previewHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingBottom: spacing.md,
+  },
+  previewBlock: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: radius.md,
+    marginBottom: spacing.sm,
+    overflow: 'hidden',
+    gap: spacing.sm,
+  },
+  previewAccent: {
+    width: 4,
+    alignSelf: 'stretch',
+  },
+  catTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    marginRight: spacing.sm,
   },
 });

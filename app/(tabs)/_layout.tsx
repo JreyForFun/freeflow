@@ -6,17 +6,19 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { radius, spacing } from '@/theme/tokens';
 import { useThemeColors } from '@/theme/ThemeContext';
+import { useModalVisibility } from '@/hooks/useModalVisibility';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withSpring,
+  withTiming,
 } from 'react-native-reanimated';
 
-// ── Tab definitions (icon-only — no labels per G2) ────────────────────────────
+// ── Tab definitions ────────────────────────────────────────────────────────────
 const TABS = [
   { name: 'index',    icon: 'calendar-today',   iconActive: 'calendar-today'  },
   { name: 'hub',      icon: 'view-grid-outline', iconActive: 'view-grid'       },
-  { name: 'ai',       icon: 'auto-fix',          iconActive: 'auto-fix'        },
+  { name: 'ai',       icon: 'robot-outline',     iconActive: 'robot'           },
   { name: 'settings', icon: 'cog-outline',       iconActive: 'cog'             },
 ] as const;
 
@@ -77,9 +79,37 @@ function TabItem({
 function CustomTabBar({ state, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
   const colors = useThemeColors();
+  const { modalCount } = useModalVisibility();
+
+  // Animate bar out when any modal is open
+  const barOpacity = useSharedValue(1);
+  const barTranslateY = useSharedValue(0);
+
+  useEffect(() => {
+    if (modalCount > 0) {
+      barOpacity.value = withTiming(0, { duration: 180 });
+      barTranslateY.value = withTiming(20, { duration: 180 });
+    } else {
+      barOpacity.value = withTiming(1, { duration: 220 });
+      barTranslateY.value = withTiming(0, { duration: 220 });
+    }
+  }, [modalCount, barOpacity, barTranslateY]);
+
+  const barAnimStyle = useAnimatedStyle(() => ({
+    opacity: barOpacity.value,
+    transform: [{ translateY: barTranslateY.value }],
+    // Disable touches when hidden so modal interactions pass through
+    pointerEvents: barOpacity.value < 0.1 ? 'none' : 'auto',
+  }));
 
   return (
-    <View style={[styles.barWrapper, { paddingBottom: Math.max(insets.bottom, 8) }]}>
+    <Animated.View
+      style={[
+        styles.barWrapper,
+        { paddingBottom: Math.max(insets.bottom, 8) },
+        barAnimStyle,
+      ]}
+    >
       <View
         style={[
           styles.pill,
@@ -114,7 +144,7 @@ function CustomTabBar({ state, navigation }: BottomTabBarProps) {
           );
         })}
       </View>
-    </View>
+    </Animated.View>
   );
 }
 

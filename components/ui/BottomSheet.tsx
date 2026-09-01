@@ -7,6 +7,8 @@
  * - Backdrop tap to dismiss
  * - Keyboard-aware (shifts up when keyboard shows)
  * - Theme-aware (reads from ThemeContext)
+ * - Hides navbar while open (via ModalVisibilityContext)
+ * - Horizontal margin so it doesn't stretch edge-to-edge
  *
  * Usage:
  *   <BottomSheet visible={show} onClose={() => setShow(false)}>
@@ -29,6 +31,7 @@ import Animated, {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useThemeColors } from '@/theme/ThemeContext';
 import { radius, spacing } from '@/theme/tokens';
+import { useModalVisibility } from '@/hooks/useModalVisibility';
 
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 const SPRING_CONFIG = { damping: 26, stiffness: 300 };
@@ -49,6 +52,7 @@ export function BottomSheet({
 }: BottomSheetProps) {
   const insets = useSafeAreaInsets();
   const colors = useThemeColors();
+  const { showModal, hideModal } = useModalVisibility();
 
   const translateY = useSharedValue(SCREEN_HEIGHT);
   const backdropOpacity = useSharedValue(0);
@@ -57,20 +61,22 @@ export function BottomSheet({
 
   const open = useCallback(() => {
     setMounted(true);
+    showModal();
     // Defer animation one frame so layout completes first
     requestAnimationFrame(() => {
       backdropOpacity.value = withTiming(1, { duration: 200 });
       translateY.value = withSpring(0, SPRING_CONFIG);
     });
-  }, [backdropOpacity, translateY]);
+  }, [backdropOpacity, translateY, showModal]);
 
   const close = useCallback(() => {
     backdropOpacity.value = withTiming(0, { duration: 180 });
     translateY.value = withSpring(SCREEN_HEIGHT, SPRING_CONFIG, (finished) => {
       if (finished) runOnJS(setMounted)(false);
     });
+    hideModal();
     onClose();
-  }, [backdropOpacity, translateY, onClose]);
+  }, [backdropOpacity, translateY, onClose, hideModal]);
 
   useEffect(() => {
     if (visible) {
@@ -81,6 +87,7 @@ export function BottomSheet({
       translateY.value = withSpring(SCREEN_HEIGHT, SPRING_CONFIG, (finished) => {
         if (finished) runOnJS(setMounted)(false);
       });
+      hideModal();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
@@ -146,12 +153,14 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'flex-end',
     pointerEvents: 'box-none',
+    paddingHorizontal: 10,
   } as any,
   sheet: {
     borderTopLeftRadius: radius.xl,
     borderTopRightRadius: radius.xl,
+    borderBottomLeftRadius: radius.xl,
+    borderBottomRightRadius: radius.xl,
     borderWidth: 1,
-    borderBottomWidth: 0,
     paddingTop: spacing.xs,
     paddingHorizontal: spacing.md,
     overflow: 'hidden',

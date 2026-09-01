@@ -17,6 +17,8 @@ import {
 import { runMigrations } from '@/db/schema';
 import { ThemeProvider, useTheme } from '@/theme/ThemeContext';
 import { setupNotificationChannel } from '@/services/notificationService';
+import { ModalVisibilityProvider } from '@/hooks/useModalVisibility';
+import { TimeFormatProvider } from '@/hooks/useTimeFormatContext';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -62,8 +64,12 @@ export default function RootLayout() {
   }
 
   return (
-    <ThemeProvider>
-      <AppShell />
-    </ThemeProvider>
+    <ModalVisibilityProvider>
+      <TimeFormatProvider>
+        <ThemeProvider>
+          <AppShell />
+        </ThemeProvider>
+      </TimeFormatProvider>
+    </ModalVisibilityProvider>
   );
 }

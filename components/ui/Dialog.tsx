@@ -29,6 +29,7 @@ import Animated, {
 import { useThemeColors } from '@/theme/ThemeContext';
 import { HeadlineMd, BodyMd, LabelMd } from '@/components/ui/Typography';
 import { radius, spacing } from '@/theme/tokens';
+import { useModalVisibility } from '@/hooks/useModalVisibility';
 
 export interface DialogAction {
   label: string;
@@ -49,6 +50,7 @@ const SPRING = { damping: 22, stiffness: 320 };
 
 export function Dialog({ visible, title, message, actions, onDismiss }: DialogProps) {
   const colors = useThemeColors();
+  const { showModal, hideModal } = useModalVisibility();
   const scale = useSharedValue(0.88);
   const opacity = useSharedValue(0);
   const [mounted, setMounted] = React.useState(false);
@@ -56,6 +58,7 @@ export function Dialog({ visible, title, message, actions, onDismiss }: DialogPr
   useEffect(() => {
     if (visible) {
       setMounted(true);
+      showModal();
       requestAnimationFrame(() => {
         scale.value = withSpring(1, SPRING);
         opacity.value = withTiming(1, { duration: 160 });
@@ -63,6 +66,7 @@ export function Dialog({ visible, title, message, actions, onDismiss }: DialogPr
     } else if (mounted) {
       scale.value = withSpring(0.88, SPRING);
       opacity.value = withTiming(0, { duration: 140 });
+      hideModal();
       const t = setTimeout(() => setMounted(false), 160);
       return () => clearTimeout(t);
     }

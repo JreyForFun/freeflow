@@ -14,7 +14,8 @@ import { EventFormSheet } from '@/components/schedule/EventFormSheet';
 import { ScreenHeader } from '@/components/ui/ScreenHeader';
 import { LabelSm } from '@/components/ui/Typography';
 import { useThemeColors } from '@/theme/ThemeContext';
-import { getTimeFormatPref, formatHourLabel, type TimeFormat } from '@/hooks/useTimeFormat';
+import { formatHourLabel } from '@/hooks/useTimeFormat';
+import { useTimeFormatCtx } from '@/hooks/useTimeFormatContext';
 import { spacing, radius, timeline, colors } from '@/theme/tokens';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -38,10 +39,7 @@ export default function ScheduleScreen() {
   const colors = useThemeColors();
   const scrollRef = useRef<ScrollView>(null);
   const appState = useRef(AppState.currentState);
-  const [timeFmt, setTimeFmt] = React.useState<TimeFormat>('24h');
-
-  // Read format pref on mount
-  useEffect(() => { setTimeFmt(getTimeFormatPref()); }, []);
+  const { timeFmt } = useTimeFormatCtx();
 
   const [events, setEvents] = useState<Event[]>([]);
   const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
@@ -143,7 +141,7 @@ export default function ScheduleScreen() {
         ))}
 
         {/* Events layer */}
-        <View style={[styles.eventsLayer, { marginLeft: timeline.timeColumnWidth }]}>
+        <View style={styles.eventsLayer}>
           {events.map((event) => {
             const { total, completed } = getTaskCountForEvent(event.id);
             return (
@@ -237,6 +235,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 0,
     bottom: 0,
+    left: timeline.timeColumnWidth + spacing.sm,
     right: spacing.sm,
   },
   quickAddBar: {

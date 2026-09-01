@@ -19,9 +19,11 @@ import type { ThemePref } from '@/theme/ThemeContext';
 import {
   getTimeFormatPref, setTimeFormatPref, type TimeFormat,
 } from '@/hooks/useTimeFormat';
+import { useTimeFormatCtx } from '@/hooks/useTimeFormatContext';
 import {
   scheduleNotification, cancelAllNotifications,
   getNotificationEnabled, setNotificationEnabled,
+  requestNotificationPermission,
 } from '@/services/notificationService';
 
 // ── Notification time helpers ─────────────────────────────────────────────────
@@ -82,14 +84,16 @@ export default function SettingsScreen() {
   const { themePref, setThemePref } = useTheme();
   const llama = useLlama();
 
-  const [timeFmt, setTimeFmt] = useState<TimeFormat>('24h');
+  const [timeFmt, setTimeFmtLocal] = useState<TimeFormat>('24h');
+  const { setTimeFmt: setTimeFmtCtx } = useTimeFormatCtx();
   const [notifEnabled, setNotifEnabled] = useState(false);
   const [notifTime, setNotifTimeState] = useState('08:00');
   const [removeDialog, setRemoveDialog] = useState(false);
   const [clearDialog, setClearDialog] = useState(false);
+  const [toast, setToast] = useState('');
 
   useEffect(() => {
-    setTimeFmt(getTimeFormatPref());
+    setTimeFmtLocal(getTimeFormatPref());
     setNotifEnabled(getNotificationEnabled());
     setNotifTimeState(getNotifTimePref());
   }, []);
@@ -103,18 +107,30 @@ export default function SettingsScreen() {
   // ── Time format ──
   const toggleTimeFmt = () => {
     const next: TimeFormat = timeFmt === '24h' ? '12h' : '24h';
-    setTimeFmt(next);
-    setTimeFormatPref(next);
+    setTimeFmtLocal(next);
+    setTimeFmtCtx(next); // updates context (saves to DB + notifies all consumers)
   };
 
   // ── Notifications ──
   const handleNotifToggle = async (value: boolean) => {
-    setNotifEnabled(value);
-    setNotificationEnabled(value);
     if (value) {
+      // Request permission first — if denied, revert the switch
+      const granted = await requestNotificationPermission();
+      if (!granted) {
+        // Permission denied — show feedback and revert
+        setNotifEnabled(false);
+        setNotificationEnabled(false);
+        setToast('Notification permission denied. Enable it in Settings.');
+        setTimeout(() => setToast(''), 3000);
+        return;
+      }
+      setNotifEnabled(true);
+      setNotificationEnabled(true);
       const [h, m] = notifTime.split(':').map(Number);
       await scheduleNotification(h, m);
     } else {
+      setNotifEnabled(false);
+      setNotificationEnabled(false);
       await cancelAllNotifications();
     }
   };
@@ -148,6 +164,13 @@ export default function SettingsScreen() {
         contentContainerStyle={[styles.content, { paddingBottom: 100 + insets.bottom }]}
         showsVerticalScrollIndicator={false}
       >
+        {/* Toast for notifications feedback */}
+        {!!toast && (
+          <View style={[styles.toast, { backgroundColor: colors.onSurface }]}>
+            <LabelSm color={colors.surface}>{toast}</LabelSm>
+          </View>
+        )}
+
         <HeadlineMd style={styles.sectionTitle}>Preferences</HeadlineMd>
 
         {/* ── Preferences group ── */}
@@ -290,7 +313,7 @@ export default function SettingsScreen() {
         <View style={styles.versionRow}>
           <LabelSm color={colors.outline}>freeflow v1.0.0</LabelSm>
           <LabelSm color={colors.outline}>·</LabelSm>
-          <LabelSm color={colors.outline}>Android · Local Only</LabelSm>
+          <LabelSm color={colors.outline}>InnovaREV - Ging</LabelSm>
         </View>
       </ScrollView>
 
@@ -335,6 +358,13 @@ const styles = StyleSheet.create({
   root: { flex: 1 },
   content: { paddingHorizontal: spacing.marginMobile, paddingTop: spacing.lg },
   sectionTitle: { marginBottom: spacing.sm },
+  toast: {
+    borderRadius: radius.full,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    alignSelf: 'center',
+    marginBottom: spacing.md,
+  },
   group: {
     borderWidth: 1,
     borderRadius: radius.xl,

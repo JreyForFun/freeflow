@@ -23,6 +23,7 @@ import { HeadlineMd, LabelMd, LabelSm } from '@/components/ui/Typography';
 import { useThemeColors } from '@/theme/ThemeContext';
 import { spacing, radius, typography } from '@/theme/tokens';
 import { getTimeFormatPref, type TimeFormat } from '@/hooks/useTimeFormat';
+import { useTimeFormatCtx } from '@/hooks/useTimeFormatContext';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface EventRow {
@@ -271,12 +272,7 @@ export function EventFormSheet({
 }: EventFormSheetProps) {
   const colors = useThemeColors();
   const isEditing = Boolean(editingEvent);
-  const [timeFmt, setTimeFmt] = useState<TimeFormat>('24h');
-
-  // Read format pref whenever the sheet opens
-  useEffect(() => {
-    if (visible) setTimeFmt(getTimeFormatPref());
-  }, [visible]);
+  const { timeFmt } = useTimeFormatCtx();
 
   // ── Multi-row state (create mode) ──────────────────────────────────────────
   const [rows, setRows] = useState<EventRow[]>([makeBlankRow(prefillDate, prefillTime)]);
@@ -489,8 +485,8 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     borderWidth: 1,
     padding: spacing.md,
-    marginBottom: spacing.sm,
-    gap: spacing.sm,
+    marginBottom: spacing.md,
+    gap: spacing.md,
   },
   rowHeader: {
     flexDirection: 'row',

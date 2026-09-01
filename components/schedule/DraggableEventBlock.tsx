@@ -17,7 +17,8 @@ import type { Event } from '@/db/events';
 import { updateEventTime } from '@/db/events';
 import { LabelSm, LabelMd } from '@/components/ui/Typography';
 import { colors, spacing, radius, timeline } from '@/theme/tokens';
-import { getTimeFormatPref, formatTime } from '@/hooks/useTimeFormat';
+import { formatTime } from '@/hooks/useTimeFormat';
+import { useTimeFormatCtx } from '@/hooks/useTimeFormatContext';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function timeToMinutes(time: string): number {
@@ -62,6 +63,7 @@ export function DraggableEventBlock({
   onPress,
   onMoved,
 }: DraggableEventBlockProps) {
+  const { timeFmt } = useTimeFormatCtx();
   const startMinutes = timeToMinutes(event.start_time);
   const endMinutes = event.end_time ? timeToMinutes(event.end_time) : startMinutes + 60;
   const durationMinutes = endMinutes - startMinutes;
@@ -166,9 +168,8 @@ export function DraggableEventBlock({
           {/* Time label */}
           <LabelSm style={styles.timeText} color={colors.onSurfaceVariant}>
             {(() => {
-              const fmt = getTimeFormatPref();
-              const start = formatTime(event.start_time, fmt);
-              const end = event.end_time ? ` – ${formatTime(event.end_time, fmt)}` : '';
+              const start = formatTime(event.start_time, timeFmt);
+              const end = event.end_time ? ` – ${formatTime(event.end_time, timeFmt)}` : '';
               return start + end;
             })()}
           </LabelSm>
