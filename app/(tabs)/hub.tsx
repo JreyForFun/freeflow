@@ -79,6 +79,11 @@ const CATEGORY_ICONS: Record<string, string> = {
 const CATEGORIES = ['focus', 'meeting', 'personal'] as const;
 
 function todayISO() { return new Date().toISOString().slice(0, 10); }
+function tomorrowISO() {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
 
 // ── ICS parser ────────────────────────────────────────────────────────────────
 function getICSField(block: string, key: string): string {
@@ -172,6 +177,8 @@ export default function HubScreen() {
   const [toast, setToast] = useState('');
   const [templatePreview, setTemplatePreview] = useState<{ name: string; description?: string; icon?: string; blocks: TemplateBlock[] } | null>(null);
   const [deleteDialog, setDeleteDialog] = useState<Template | null>(null);
+  // Date stepper for template apply (Fix #7)
+  const [targetDate, setTargetDate] = useState(todayISO());
 
   // Template maker state
   const [tplName, setTplName] = useState('');
@@ -187,15 +194,14 @@ export default function HubScreen() {
   }, []);
 
   // ── Apply template ─────────────────────────────────────────────────────────
-  const applyTemplate = useCallback((blocks: TemplateBlock[]) => {
-    const today = todayISO();
+  const applyTemplate = useCallback((blocks: TemplateBlock[], date: string) => {
     let added = 0;
     let skipped = 0;
     try {
       for (const b of blocks) {
-        if (eventExists(b.title, today, b.start)) { skipped++; continue; }
+        if (eventExists(b.title, date, b.start)) { skipped++; continue; }
         createEvent({
-          id: randomUUID(), title: b.title, date: today,
+          id: randomUUID(), title: b.title, date,
           start_time: b.start, end_time: b.end || null,
           description: null, category: b.category as EventCategory,
           completed: 0, source: 'template',
@@ -401,7 +407,12 @@ export default function HubScreen() {
       </BottomSheet>
 
       {/* Template preview bottom sheet */}
-      <BottomSheet visible={!!templatePreview} onClose={() => setTemplatePreview(null)} maxHeightRatio={0.82}>
+      <BottomSheet
+        visible={!!templatePreview}
+        onClose={() => { setTemplatePreview(null); setTargetDate(todayISO()); }}
+        maxHeightRatio={0.88}
+      >
+        {/* Header */}
         <View style={styles.previewHeader}>
           {templatePreview?.icon ? (
             <View style={[styles.iconWrap, { backgroundColor: colors.surfaceContainer, borderColor: colors.outlineVariant }]}>
@@ -414,50 +425,101 @@ export default function HubScreen() {
               <LabelSm color={colors.onSurfaceVariant}>{templatePreview.description}</LabelSm>
             ) : null}
           </View>
-          <TouchableOpacity onPress={() => setTemplatePreview(null)} style={[styles.closeBtn, { backgroundColor: colors.surfaceContainerHigh }]}>
+          <TouchableOpacity
+            onPress={() => { setTemplatePreview(null); setTargetDate(todayISO()); }}
+            style={[styles.closeBtn, { backgroundColor: colors.surfaceContainerHigh }]}
+          >
             <MaterialCommunityIcons name="close" size={18} color={colors.onSurfaceVariant} />
           </TouchableOpacity>
         </View>
 
-        <LabelSm color={colors.onSurfaceVariant} style={{ marginBottom: spacing.sm, textTransform: 'uppercase', letterSpacing: 1 }}>
-          {templatePreview?.blocks.length ?? 0} time blocks — today
+        {/* ✅ Fix #7 — Date stepper */}
+        <View style={[styles.dateStepper, { backgroundColor: colors.surfaceContainerLow, borderColor: colors.outlineVariant }]}>
+          <TouchableOpacity
+            style={styles.dateStepBtn}
+            onPress={() => {
+              const d = new Date(targetDate);
+              d.setDate(d.getDate() - 1);
+              setTargetDate(d.toISOString().slice(0, 10));
+            }}
+          >
+            <MaterialCommunityIcons name="chevron-left" size={20} color={colors.primary} />
+          </TouchableOpacity>
+
+          <View style={styles.dateStepCenter}>
+            <LabelSm color={colors.onSurfaceVariant} style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1 }}>Apply to</LabelSm>
+            <LabelMd color={colors.onSurface}>
+              {targetDate === todayISO()
+                ? 'Today'
+                : targetDate === tomorrowISO()
+                  ? 'Tomorrow'
+                  : new Date(targetDate + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+            </LabelMd>
+          </View>
+
+          <TouchableOpacity
+            style={styles.dateStepBtn}
+            onPress={() => {
+              const d = new Date(targetDate);
+              d.setDate(d.getDate() + 1);
+              setTargetDate(d.toISOString().slice(0, 10));
+            }}
+          >
+            <MaterialCommunityIcons name="chevron-right" size={20} color={colors.primary} />
+          </TouchableOpacity>
+        </View>
+
+        <LabelSm color={colors.onSurfaceVariant} style={styles.previewBlockCount}>
+          {templatePreview?.blocks.length ?? 0} time blocks
         </LabelSm>
 
-        <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 340 }}>
+        {/* ✅ Fix #6 — Preview block list with proper spacing */}
+        <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 300 }}>
           {templatePreview?.blocks.map((block, i) => (
             <View
               key={i}
-              style={[styles.previewBlock, { backgroundColor: colors.surfaceContainerLow, borderColor: colors.outlineVariant }]}
+              style={[
+                styles.previewBlock,
+                { backgroundColor: colors.surfaceContainerLow, borderColor: colors.outlineVariant },
+              ]}
             >
-              <View style={[styles.previewAccent, { backgroundColor: colors.primary }]} />
-              <View style={{ flex: 1 }}>
+              <View style={[styles.previewAccent, {
+                backgroundColor:
+                  block.category === 'focus' ? colors.secondary :
+                  block.category === 'meeting' ? colors.tertiary :
+                  colors.primary,
+              }]} />
+              <View style={styles.previewBlockBody}>
                 <LabelMd color={colors.onSurface}>{block.title}</LabelMd>
-                <LabelSm color={colors.onSurfaceVariant}>
-                  {block.start}{block.end ? ` → ${block.end}` : ''}
-                </LabelSm>
-              </View>
-              <View style={[styles.catTag, { backgroundColor: `${colors.primary}18`, borderColor: `${colors.primary}30` }]}>
-                <MaterialCommunityIcons
-                  name={(CATEGORY_ICONS[block.category] ?? 'circle-outline') as any}
-                  size={12}
-                  color={colors.primary}
-                />
-                <LabelSm color={colors.primary} style={{ fontSize: 10 }}>{block.category}</LabelSm>
+                <View style={styles.previewBlockMeta}>
+                  <MaterialCommunityIcons name="clock-outline" size={11} color={colors.onSurfaceVariant} />
+                  <LabelSm color={colors.onSurfaceVariant} style={{ fontSize: 11 }}>
+                    {block.start}{block.end ? ` – ${block.end}` : ''}
+                  </LabelSm>
+                  <View style={[styles.catTag, { backgroundColor: `${colors.primary}15`, borderColor: `${colors.primary}25` }]}>
+                    <MaterialCommunityIcons
+                      name={(CATEGORY_ICONS[block.category] ?? 'circle-outline') as any}
+                      size={10}
+                      color={colors.primary}
+                    />
+                    <LabelSm color={colors.primary} style={{ fontSize: 10 }}>{block.category}</LabelSm>
+                  </View>
+                </View>
               </View>
             </View>
           ))}
         </ScrollView>
 
         <View style={[styles.makerFooter, { borderTopColor: colors.outlineVariant, marginTop: spacing.md }]}>
-          <TouchableOpacity style={styles.cancelBtn} onPress={() => setTemplatePreview(null)}>
+          <TouchableOpacity style={styles.cancelBtn} onPress={() => { setTemplatePreview(null); setTargetDate(todayISO()); }}>
             <LabelMd color={colors.onSurfaceVariant}>Cancel</LabelMd>
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.saveBtn, { backgroundColor: colors.primary }]}
-            onPress={() => templatePreview && applyTemplate(templatePreview.blocks)}
+            onPress={() => templatePreview && applyTemplate(templatePreview.blocks, targetDate)}
           >
             <MaterialCommunityIcons name="plus" size={16} color={colors.onPrimary} />
-            <LabelMd color={colors.onPrimary}>Add to Today</LabelMd>
+            <LabelMd color={colors.onPrimary}>Add to Schedule</LabelMd>
           </TouchableOpacity>
         </View>
       </BottomSheet>
@@ -595,27 +657,61 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     paddingBottom: spacing.md,
   },
-  previewBlock: {
+  // Date stepper
+  dateStepper: {
     flexDirection: 'row',
     alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: radius.lg,
+    marginBottom: spacing.md,
+    overflow: 'hidden',
+  },
+  dateStepBtn: {
+    padding: spacing.sm,
+    paddingHorizontal: spacing.md,
+  },
+  dateStepCenter: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: spacing.sm,
+  },
+  previewBlockCount: {
+    marginBottom: spacing.sm,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    opacity: 0.7,
+  },
+  previewBlock: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
     borderWidth: 1,
     borderRadius: radius.md,
     marginBottom: spacing.sm,
     overflow: 'hidden',
-    gap: spacing.sm,
+    minHeight: 52,
   },
   previewAccent: {
     width: 4,
-    alignSelf: 'stretch',
+  },
+  previewBlockBody: {
+    flex: 1,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    gap: 4,
+  },
+  previewBlockMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    flexWrap: 'wrap',
   },
   catTag: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 3,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 4,
+    paddingHorizontal: spacing.xs,
+    paddingVertical: 3,
     borderRadius: radius.full,
     borderWidth: 1,
-    marginRight: spacing.sm,
   },
 });

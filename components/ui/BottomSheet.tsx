@@ -60,13 +60,11 @@ export function BottomSheet({
   const [mounted, setMounted] = React.useState(false);
 
   const open = useCallback(() => {
+    // Ensure sheet starts off-screen before animating in
+    translateY.value = SCREEN_HEIGHT;
+    backdropOpacity.value = 0;
     setMounted(true);
     showModal();
-    // Defer animation one frame so layout completes first
-    requestAnimationFrame(() => {
-      backdropOpacity.value = withTiming(1, { duration: 200 });
-      translateY.value = withSpring(0, SPRING_CONFIG);
-    });
   }, [backdropOpacity, translateY, showModal]);
 
   const close = useCallback(() => {
@@ -78,18 +76,27 @@ export function BottomSheet({
     onClose();
   }, [backdropOpacity, translateY, onClose, hideModal]);
 
+  // Trigger open animation AFTER mounted=true so layout exists
+  useEffect(() => {
+    if (mounted) {
+      backdropOpacity.value = withTiming(1, { duration: 200 });
+      translateY.value = withSpring(0, SPRING_CONFIG);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mounted]);
+
+  // React to visible prop changes
   useEffect(() => {
     if (visible) {
       open();
     } else if (mounted) {
-      // Only animate close if it was mounted (avoid spurious animation on init)
       backdropOpacity.value = withTiming(0, { duration: 180 });
       translateY.value = withSpring(SCREEN_HEIGHT, SPRING_CONFIG, (finished) => {
         if (finished) runOnJS(setMounted)(false);
       });
       hideModal();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
 
   const backdropStyle = useAnimatedStyle(() => ({

@@ -53,7 +53,10 @@ interface DraggableEventBlockProps {
   taskCount: number;
   completedTaskCount: number;
   onPress: (event: Event) => void;
-  onMoved: () => void; // callback to refresh parent after a move
+  onMoved: () => void;
+  /** Column layout for overlap resolution */
+  columnIndex?: number;
+  totalColumns?: number;
 }
 
 export function DraggableEventBlock({
@@ -62,6 +65,8 @@ export function DraggableEventBlock({
   completedTaskCount,
   onPress,
   onMoved,
+  columnIndex = 0,
+  totalColumns = 1,
 }: DraggableEventBlockProps) {
   const { timeFmt } = useTimeFormatCtx();
   const startMinutes = timeToMinutes(event.start_time);
@@ -148,6 +153,10 @@ export function DraggableEventBlock({
 
   const bgColor = CATEGORY_COLORS[event.category] ?? colors.surfaceContainerHigh;
 
+  // ── Column layout ──
+  const colLeft  = totalColumns > 1 ? `${(columnIndex / totalColumns) * 100}%` as any : 0;
+  const colRight = totalColumns > 1 ? `${((totalColumns - columnIndex - 1) / totalColumns) * 100}%` as any : 0;
+
   return (
     <GestureDetector gesture={composed}>
       <Animated.View
@@ -157,6 +166,8 @@ export function DraggableEventBlock({
             top: topPx,
             height: heightPx,
             backgroundColor: bgColor,
+            left: colLeft,
+            right: colRight,
           },
           animStyle,
         ]}

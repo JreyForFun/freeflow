@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   View, StyleSheet, TouchableOpacity, ScrollView,
 } from 'react-native';
@@ -16,7 +16,7 @@ import { Dialog } from '@/components/ui/Dialog';
 import {
   HeadlineMd, BodyMd, LabelMd, LabelSm,
 } from '@/components/ui/Typography';
-import { colors as staticColors, spacing, radius } from '@/theme/tokens';
+import { spacing, radius } from '@/theme/tokens';
 import { useThemeColors } from '@/theme/ThemeContext';
 import { useLlama } from '@/hooks/useLlama';
 
@@ -461,7 +461,6 @@ export default function AIScreen() {
 }
 
 // ── Styles ────────────────────────────────────────────────────────────────────
-const { colors } = { colors: staticColors };
 
 const styles = StyleSheet.create({
   root: { flex: 1 },

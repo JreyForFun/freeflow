@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View, ScrollView, StyleSheet,
-  TouchableOpacity, AppState, AppStateStatus,
+  TouchableOpacity, AppState, AppStateStatus, RefreshControl,
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { useFocusEffect } from 'expo-router';
 
 import { getEventsByDate, type Event } from '@/db/events';
 import { getTasksByEvent, getTaskCountForEvent, type Task } from '@/db/tasks';
@@ -16,23 +17,74 @@ import { LabelSm } from '@/components/ui/Typography';
 import { useThemeColors } from '@/theme/ThemeContext';
 import { formatHourLabel } from '@/hooks/useTimeFormat';
 import { useTimeFormatCtx } from '@/hooks/useTimeFormatContext';
-import { spacing, radius, timeline, colors } from '@/theme/tokens';
+import { spacing, radius, timeline } from '@/theme/tokens';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function todayISO(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+function timeToMinutes(time: string): number {
+  const [h, m] = time.split(':').map(Number);
+  return h * 60 + m;
+}
+
 function getScrollTarget(): number {
   const now = new Date();
   const minutes = now.getHours() * 60 + now.getMinutes();
-  // Scroll 1 hour before current time so you see context
   const targetMinutes = Math.max(0, minutes - 60);
   return (targetMinutes / 60) * timeline.hourHeight;
 }
 
-// Hour indices 0–23 — labels rendered dynamically based on time format pref
+// Hour indices 0–23
 const HOUR_INDICES = Array.from({ length: 24 }, (_, i) => i);
+
+// ── Overlap column layout ─────────────────────────────────────────────────────
+// Each event gets a column index + totalColumns so they sit side-by-side
+interface EventLayout {
+  event: Event;
+  column: number;
+  totalColumns: number;
+}
+
+function computeEventLayout(events: Event[]): EventLayout[] {
+  if (events.length === 0) return [];
+
+  const sorted = [...events].sort((a, b) =>
+    timeToMinutes(a.start_time) - timeToMinutes(b.start_time)
+  );
+
+  // Group into collision clusters
+  const layouts: EventLayout[] = sorted.map((e) => ({ event: e, column: 0, totalColumns: 1 }));
+
+  // For each event, find all events that overlap with it
+  for (let i = 0; i < sorted.length; i++) {
+    const aStart = timeToMinutes(sorted[i].start_time);
+    const aEnd = sorted[i].end_time ? timeToMinutes(sorted[i].end_time!) : aStart + 60;
+
+    const overlapping = [i]; // indices that overlap with event i
+    for (let j = 0; j < sorted.length; j++) {
+      if (i === j) continue;
+      const bStart = timeToMinutes(sorted[j].start_time);
+      const bEnd = sorted[j].end_time ? timeToMinutes(sorted[j].end_time!) : bStart + 60;
+      if (aStart < bEnd && aEnd > bStart) {
+        overlapping.push(j);
+      }
+    }
+
+    // Assign columns within the overlap group
+    const usedColumns = new Set<number>();
+    for (const idx of overlapping) {
+      if (idx !== i) usedColumns.add(layouts[idx].column);
+    }
+    let col = 0;
+    while (usedColumns.has(col)) col++;
+    layouts[i].column = col;
+    layouts[i].totalColumns = overlapping.length;
+  }
+
+  return layouts;
+}
 
 // ── Main Screen ───────────────────────────────────────────────────────────────
 export default function ScheduleScreen() {
@@ -42,6 +94,7 @@ export default function ScheduleScreen() {
   const { timeFmt } = useTimeFormatCtx();
 
   const [events, setEvents] = useState<Event[]>([]);
+  const [refreshing, setRefreshing] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
   const [selectedTasks, setSelectedTasks] = useState<Task[]>([]);
   const [modalVisible, setModalVisible] = useState(false);
@@ -57,8 +110,24 @@ export default function ScheduleScreen() {
     setEvents(getEventsByDate(today));
   }, [today]);
 
+  // Load on mount
   useEffect(() => {
     loadEvents();
+  }, [loadEvents]);
+
+  // ✅ FIX #4 — Reload every time this tab is focused (cross-tab refresh)
+  useFocusEffect(
+    useCallback(() => {
+      loadEvents();
+    }, [loadEvents])
+  );
+
+  // ── Pull-to-refresh ──────────────────────────────────────────────────────────
+  // ✅ FIX #5
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    loadEvents();
+    setTimeout(() => setRefreshing(false), 600);
   }, [loadEvents]);
 
   // ── Auto-scroll to current time ──────────────────────────────────────────────
@@ -67,12 +136,11 @@ export default function ScheduleScreen() {
   }, []);
 
   useEffect(() => {
-    // Small delay lets the layout settle before scrolling
     const timer = setTimeout(scrollToNow, 300);
     return () => clearTimeout(timer);
   }, [scrollToNow]);
 
-  // Re-scroll when app comes to foreground
+  // Re-scroll + reload when app comes to foreground
   useEffect(() => {
     const sub = AppState.addEventListener('change', (nextState: AppStateStatus) => {
       if (appState.current.match(/inactive|background/) && nextState === 'active') {
@@ -118,6 +186,8 @@ export default function ScheduleScreen() {
     setEditingEvent(undefined);
   }, []);
 
+  // ✅ FIX #2 — Overlap column layout
+  const eventLayouts = computeEventLayout(events);
 
   // ── Render ───────────────────────────────────────────────────────────────────
   return (
@@ -131,18 +201,28 @@ export default function ScheduleScreen() {
         contentContainerStyle={styles.timelineContent}
         showsVerticalScrollIndicator={false}
         scrollEventThrottle={16}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.primary}
+            colors={[colors.primary]}
+          />
+        }
       >
-        {/* Hour grid */}
+        {/* ✅ FIX #1 — Hour grid: anchor rows to height:0, label sits above line */}
         {HOUR_INDICES.map((hour) => (
           <View key={hour} style={[styles.hourRow, { top: hour * timeline.hourHeight }]}>
-            <LabelSm style={styles.hourLabel}>{formatHourLabel(hour, timeFmt)}</LabelSm>
-            <View style={styles.hourLine} />
+            <LabelSm style={[styles.hourLabel, { color: colors.onSurfaceVariant }]}>
+              {formatHourLabel(hour, timeFmt)}
+            </LabelSm>
+            <View style={[styles.hourLine, { backgroundColor: colors.outlineVariant }]} />
           </View>
         ))}
 
         {/* Events layer */}
         <View style={styles.eventsLayer}>
-          {events.map((event) => {
+          {eventLayouts.map(({ event, column, totalColumns }) => {
             const { total, completed } = getTaskCountForEvent(event.id);
             return (
               <DraggableEventBlock
@@ -152,6 +232,8 @@ export default function ScheduleScreen() {
                 completedTaskCount={completed}
                 onPress={openEvent}
                 onMoved={loadEvents}
+                columnIndex={column}
+                totalColumns={totalColumns}
               />
             );
           })}
@@ -164,7 +246,7 @@ export default function ScheduleScreen() {
       {/* Quick-add pill — taps to open full form */}
       <View style={styles.quickAddBar}>
         <TouchableOpacity
-          style={styles.quickAddInner}
+          style={[styles.quickAddInner, { backgroundColor: colors.surfaceContainer, borderColor: `${colors.primary}33` }]}
           onPress={() => setFormVisible(true)}
           activeOpacity={0.8}
         >
@@ -199,38 +281,38 @@ export default function ScheduleScreen() {
 }
 
 const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-  },
-  scroll: {
-    flex: 1,
-  },
+  root: { flex: 1 },
+  scroll: { flex: 1 },
   timelineContent: {
     height: timeline.totalHeight + 100,
     position: 'relative',
   },
+
+  // ✅ FIX #1 — row is a zero-height anchor; label floats above the line
   hourRow: {
     position: 'absolute',
     left: 0,
     right: 0,
+    height: 0,                // ← anchor only, no height
     flexDirection: 'row',
-    alignItems: 'center',
-    height: timeline.hourHeight,
+    alignItems: 'flex-start',
+    overflow: 'visible',
   },
   hourLabel: {
     width: timeline.timeColumnWidth,
     textAlign: 'right',
     paddingRight: spacing.sm,
     fontSize: 10,
-    color: colors.onSurfaceVariant,
+    lineHeight: 12,
+    marginTop: -6,            // ← sit label above the grid line
     opacity: 0.7,
   },
   hourLine: {
     flex: 1,
     height: 1,
-    backgroundColor: colors.outlineVariant,
-    opacity: 0.4,
+    opacity: 0.35,
   },
+
   eventsLayer: {
     position: 'absolute',
     top: 0,
@@ -243,15 +325,13 @@ const styles = StyleSheet.create({
     paddingTop: spacing.md,
     paddingBottom: 112,
     borderTopWidth: 1,
-    borderTopColor: `rgba(0,0,0,0.08)`,
+    borderTopColor: 'rgba(0,0,0,0.06)',
   },
   quickAddInner: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.surfaceContainer,
     borderRadius: radius.full,
     borderWidth: 1,
-    borderColor: `${colors.primary}33`,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm + 2,
     gap: spacing.sm,
