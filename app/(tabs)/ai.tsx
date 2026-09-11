@@ -2,19 +2,21 @@ import React, { useCallback, useMemo, useState } from 'react';
 import {
   View, StyleSheet, TouchableOpacity, ScrollView,
 } from 'react-native';
+import Svg, { Circle, G } from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 
 import {
-  getEventsForDateRange,
   getCompletedEventCountPerDay,
   getScheduledMinutesPerDay,
+  getTodayEventStats,
+  getLongestContinuousBlockMinutes,
 } from '@/db/events';
 import { ScreenHeader } from '@/components/ui/ScreenHeader';
 import { Dialog } from '@/components/ui/Dialog';
 import {
-  HeadlineMd, BodyMd, LabelMd, LabelSm,
+  BodyMd, LabelMd, LabelSm,
 } from '@/components/ui/Typography';
 import { spacing, radius } from '@/theme/tokens';
 import { useThemeColors } from '@/theme/ThemeContext';
@@ -38,8 +40,169 @@ function allDatesBetween(start: string, end: string): string[] {
   return dates;
 }
 
+// ── Activity Rings ────────────────────────────────────────────────────────────
+// Three concentric SVG arc rings — Apple Watch style
+// Ring 1 (outer): scheduled hours today vs 8h goal
+// Ring 2 (middle): events completed vs total today
+// Ring 3 (inner): focus blocks completed vs total today
+
+interface RingDef {
+  value: number;   // 0–1 progress
+  color: string;
+  trackColor: string;
+  radius: number;
+  strokeWidth: number;
+  label: string;
+  detail: string;
+}
+
+function ArcRing({
+  cx, cy, r, strokeWidth, progress, color, trackColor,
+}: {
+  cx: number; cy: number; r: number; strokeWidth: number;
+  progress: number; color: string; trackColor: string;
+}) {
+  const circumference = 2 * Math.PI * r;
+  const safeProgress = Math.min(1, Math.max(0, progress));
+  const dash = circumference * safeProgress;
+  const gap = circumference - dash;
+
+  // Rotate so arc starts at top (−90°)
+  return (
+    <G rotation="-90" origin={`${cx},${cy}`}>
+      {/* Track */}
+      <Circle
+        cx={cx} cy={cy} r={r}
+        strokeWidth={strokeWidth}
+        stroke={trackColor}
+        fill="none"
+        strokeLinecap="round"
+      />
+      {/* Progress — only render when > 0 to avoid dot artifact from strokeLinecap=round */}
+      {safeProgress > 0 && (
+        <Circle
+          cx={cx} cy={cy} r={r}
+          strokeWidth={strokeWidth}
+          stroke={color}
+          fill="none"
+          strokeLinecap="round"
+          strokeDasharray={`${dash} ${gap}`}
+          strokeDashoffset={0}
+        />
+      )}
+    </G>
+  );
+}
+
+function ActivityRingsWidget({
+  rings,
+  centerLabel,
+  centerSub,
+}: {
+  rings: RingDef[];
+  centerLabel: string;
+  centerSub: string;
+}) {
+  const SIZE = 180;
+  const CX = SIZE / 2;
+  const CY = SIZE / 2;
+
+  return (
+    <View style={ringStyles.container}>
+      {/* SVG rings */}
+      <View style={ringStyles.svgWrap}>
+        <Svg width={SIZE} height={SIZE}>
+          {rings.map((ring, i) => (
+            <ArcRing
+              key={i}
+              cx={CX}
+              cy={CY}
+              r={ring.radius}
+              strokeWidth={ring.strokeWidth}
+              progress={ring.value}
+              color={ring.color}
+              trackColor={ring.trackColor}
+            />
+          ))}
+        </Svg>
+        {/* Center text overlay */}
+        <View style={ringStyles.center} pointerEvents="none">
+          <LabelMd style={ringStyles.centerLabel}>{centerLabel}</LabelMd>
+          <LabelSm style={ringStyles.centerSub}>{centerSub}</LabelSm>
+        </View>
+      </View>
+
+      {/* Legend */}
+      <View style={ringStyles.legend}>
+        {rings.map((ring, i) => (
+          <View key={i} style={ringStyles.legendRow}>
+            <View style={[ringStyles.legendDot, { backgroundColor: ring.color }]} />
+            <View>
+              <LabelMd style={ringStyles.legendLabel}>{ring.detail}</LabelMd>
+              <LabelSm style={ringStyles.legendSub}>{ring.label}</LabelSm>
+            </View>
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+const ringStyles = StyleSheet.create({
+  container: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.lg,
+    paddingVertical: spacing.sm,
+  },
+  svgWrap: {
+    position: 'relative',
+    width: 180,
+    height: 180,
+  },
+  center: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  centerLabel: {
+    fontSize: 22,
+    fontWeight: '700',
+    lineHeight: 26,
+  },
+  centerSub: {
+    fontSize: 10,
+    opacity: 0.6,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  legend: {
+    flex: 1,
+    gap: spacing.md,
+  },
+  legendRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  legendDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  legendLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    lineHeight: 18,
+  },
+  legendSub: {
+    fontSize: 11,
+    opacity: 0.6,
+  },
+});
+
 // ── GitHub-style heatmap ──────────────────────────────────────────────────────
-// Levels 0–4: empty → light → medium → strong → full primary
 function heatLevel(count: number): 0 | 1 | 2 | 3 | 4 {
   if (count === 0) return 0;
   if (count === 1) return 1;
@@ -55,13 +218,11 @@ function WorkloadHeatmap({
 }) {
   const colors = useThemeColors();
   const today = todayISO();
-  const start = subtractDays(today, 69); // 10 weeks
+  const start = subtractDays(today, 69);
   const dates = allDatesBetween(start, today);
 
-  // Build week columns (7 rows Mon–Sun)
   const weeks: string[][] = [];
   let week: string[] = [];
-  // Pad so first week starts on Monday
   const firstDow = (new Date(start).getDay() + 6) % 7;
   for (let i = 0; i < firstDow; i++) week.push('');
   for (const d of dates) {
@@ -70,7 +231,6 @@ function WorkloadHeatmap({
   }
   if (week.length > 0) { while (week.length < 7) week.push(''); weeks.push(week); }
 
-  // Month labels — show month name at its first week column
   const monthLabels: { label: string; col: number }[] = [];
   weeks.forEach((wk, i) => {
     const first = wk.find(d => d !== '');
@@ -83,22 +243,19 @@ function WorkloadHeatmap({
   });
 
   const DAY_LABELS = ['M', '', 'W', '', 'F', '', ''];
-
-  // GitHub-style solid fill colors — no borders, only filled cells
   const CELL_SIZE = 11;
   const CELL_GAP = 3;
 
   const HEAT_COLORS = [
-    colors.surfaceContainerHighest,          // 0 – empty
-    `${colors.primary}28`,                   // 1 – very light
-    `${colors.primary}55`,                   // 2 – light
-    `${colors.primary}90`,                   // 3 – medium
-    colors.primary,                          // 4 – full
+    colors.surfaceContainerHighest,
+    `${colors.primary}28`,
+    `${colors.primary}55`,
+    `${colors.primary}90`,
+    colors.primary,
   ];
 
   return (
     <View style={{ width: '100%' }}>
-      {/* Month row */}
       <View style={[heatStyles.monthRow, { marginLeft: 18 }]}>
         {monthLabels.map((m, i) => (
           <LabelSm
@@ -116,7 +273,6 @@ function WorkloadHeatmap({
       </View>
 
       <View style={{ flexDirection: 'row' }}>
-        {/* Day labels */}
         <View style={heatStyles.dayLabels}>
           {DAY_LABELS.map((l, i) => (
             <LabelSm
@@ -128,7 +284,6 @@ function WorkloadHeatmap({
           ))}
         </View>
 
-        {/* Scrollable grid — fills card width */}
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flex: 1 }}>
           <View style={heatStyles.grid}>
             {weeks.map((wk, wi) => (
@@ -141,14 +296,8 @@ function WorkloadHeatmap({
                       key={di}
                       style={[
                         heatStyles.cell,
-                        {
-                          backgroundColor: d ? HEAT_COLORS[level as 0|1|2|3|4] : 'transparent',
-                        },
-                        // GitHub today ring: thin colored border ON TOP of filled cell
-                        isToday && {
-                          borderWidth: 1.5,
-                          borderColor: colors.onSurface,
-                        },
+                        { backgroundColor: d ? HEAT_COLORS[level as 0|1|2|3|4] : 'transparent' },
+                        isToday && { borderWidth: 1.5, borderColor: colors.onSurface },
                       ]}
                     />
                   );
@@ -159,7 +308,6 @@ function WorkloadHeatmap({
         </ScrollView>
       </View>
 
-      {/* Legend */}
       <View style={heatStyles.legend}>
         <LabelSm style={{ fontSize: 9, color: colors.onSurfaceVariant }}>Less</LabelSm>
         {HEAT_COLORS.map((c, i) => (
@@ -186,72 +334,76 @@ const heatStyles = StyleSheet.create({
   },
 });
 
-// ── Streak — consecutive days with ANY scheduled event ────────────────────────
-function computeStreak(eventDates: Set<string>): { current: number; longest: number } {
-  const today = todayISO();
-
-  let cur = 0;
-  let d = today;
-  if (!eventDates.has(d)) d = subtractDays(d, 1);
-  while (eventDates.has(d)) { cur++; d = subtractDays(d, 1); }
-
-  let longest = 0;
-  let run = 0;
-  const sorted = Array.from(eventDates).sort();
-  for (let i = 0; i < sorted.length; i++) {
-    if (i === 0) { run = 1; }
-    else {
-      const prev = sorted[i - 1];
-      const expectedNext = addDays(prev, 1);
-      run = sorted[i] === expectedNext ? run + 1 : 1;
-    }
-    if (run > longest) longest = run;
-  }
-
-  return { current: cur, longest };
-}
-
-// ── Burnout risk — improved thresholds & context ──────────────────────────────
+// ── Burnout — multi-signal algorithm ─────────────────────────────────────────
 type Risk = 'Low' | 'Moderate' | 'High';
 
 interface BurnoutResult {
   risk: Risk;
-  avgHours: number;
+  avgActiveHours: number;   // avg over days that HAVE events
+  heavyDays: number;        // days with >5h scheduled
+  maxBlockMinutes: number;  // longest unbroken scheduled block this week
   daysWithData: number;
   recommendations: string[];
 }
 
-function computeBurnout(minutesPerDay: { date: string; minutes: number }[]): BurnoutResult {
-  if (minutesPerDay.length === 0) {
-    return {
-      risk: 'Low', avgHours: 0, daysWithData: 0,
-      recommendations: ['Start scheduling your day to build momentum.'],
-    };
+function computeBurnout(
+  minutesPerDay: { date: string; minutes: number }[],
+  maxBlockPerDay: { date: string; block: number }[],
+): BurnoutResult {
+  const empty: BurnoutResult = {
+    risk: 'Low', avgActiveHours: 0, heavyDays: 0,
+    maxBlockMinutes: 0, daysWithData: 0,
+    recommendations: ['Start scheduling your day to build momentum.'],
+  };
+  if (minutesPerDay.length === 0) return empty;
+
+  const daysWithData = minutesPerDay.length;
+  // Average over ACTIVE days only — more honest than dividing by 7
+  const totalMins = minutesPerDay.reduce((s, d) => s + d.minutes, 0);
+  const avgActiveHours = totalMins / 60 / daysWithData;
+
+  // Days with >5 scheduled hours (heavy load indicator)
+  const heavyDays = minutesPerDay.filter(d => d.minutes > 300).length;
+
+  // Longest single unbroken block across the whole week
+  const maxBlockMinutes = maxBlockPerDay.reduce((m, d) => Math.max(m, d.block), 0);
+
+  // ── Decision tree: any one signal can escalate risk ──
+  const isHigh =
+    avgActiveHours > 6 ||     // avg active day > 6h
+    heavyDays >= 4 ||          // 4+ heavy days this week
+    maxBlockMinutes >= 210;    // 3.5h+ unbroken block
+
+  const isModerate =
+    avgActiveHours > 3.5 ||
+    heavyDays >= 2 ||
+    maxBlockMinutes >= 105;    // 1.75h+ unbroken block
+
+  if (isHigh) {
+    const recs: string[] = [];
+    if (maxBlockMinutes >= 210)
+      recs.push(`Your longest unbroken block was ${Math.round(maxBlockMinutes / 60 * 10) / 10}h — schedule a break every 90 minutes.`);
+    if (heavyDays >= 4)
+      recs.push(`${heavyDays} out of 7 days had 5+ hours scheduled. Protect at least 2 light days per week.`);
+    if (avgActiveHours > 6)
+      recs.push('Keep at least one morning per week completely event-free for recovery.');
+    recs.push('Defer non-urgent tasks to next week — protect your energy.');
+    return { risk: 'High', avgActiveHours, heavyDays, maxBlockMinutes, daysWithData, recommendations: recs };
   }
 
-  const total = minutesPerDay.reduce((s, d) => s + d.minutes, 0);
-  const daysWithData = minutesPerDay.length;
-  // Average over the full 7-day window, not just days with data
-  const avgHours = total / 60 / 7;
+  if (isModerate) {
+    const recs: string[] = [];
+    if (maxBlockMinutes >= 105)
+      recs.push(`Longest unbroken block: ${Math.round(maxBlockMinutes / 60 * 10) / 10}h. Add a midday recovery gap.`);
+    if (heavyDays >= 2)
+      recs.push(`${heavyDays} days with 5+ hours — consider spacing out heavy days.`);
+    recs.push('Protect the last hour of each day from new commitments.');
+    return { risk: 'Moderate', avgActiveHours, heavyDays, maxBlockMinutes, daysWithData, recommendations: recs };
+  }
 
-  if (avgHours > 7) return {
-    risk: 'High', avgHours, daysWithData,
-    recommendations: [
-      'Schedule 15-min breaks every 90 minutes of focused work.',
-      'Keep at least one morning per week completely event-free.',
-      'Defer non-urgent tasks to next week — protect your recovery.',
-    ],
-  };
-  if (avgHours > 5) return {
-    risk: 'Moderate', avgHours, daysWithData,
-    recommendations: [
-      'Add a midday recovery block (walk, lunch, or rest).',
-      'Protect the last hour of each day from new commitments.',
-    ],
-  };
   return {
-    risk: 'Low', avgHours, daysWithData,
-    recommendations: ['Workload looks healthy. Maintain this rhythm.'],
+    risk: 'Low', avgActiveHours, heavyDays, maxBlockMinutes, daysWithData,
+    recommendations: ['Workload looks healthy — maintain this rhythm.'],
   };
 }
 
@@ -264,41 +416,37 @@ export default function AIScreen() {
   const tenWeeksAgo = subtractDays(today, 69);
   const weekAgo = subtractDays(today, 6);
 
-  // A1 — Streak: any day with a scheduled event
-  const eventDates = useMemo(() => {
-    const rows = getEventsForDateRange(tenWeeksAgo, today);
-    return new Set(rows.map(e => e.date));
-  }, [today, tenWeeksAgo]);
+  // ── Today's Activity Rings data ────────────────────────────────────────────
+  const todayStats = useMemo(() => getTodayEventStats(today), [today]);
 
-  const streakResult = useMemo(() => computeStreak(eventDates), [eventDates]);
-  const streak = streakResult.current;
-  const longestStreak = streakResult.longest;
-
-  // Heatmap: completed events per day
+  // ── Heatmap: completed events per day ─────────────────────────────────────
   const completedCounts = useMemo(() => {
     const rows = getCompletedEventCountPerDay(tenWeeksAgo, today);
     return Object.fromEntries(rows.map(r => [r.date, r.count]));
   }, [today, tenWeeksAgo]);
 
-  // A2 — Burnout
+  // ── Burnout: scheduled minutes + longest block per day this week ───────────
   const burnout = useMemo(() => {
     const mins = getScheduledMinutesPerDay(weekAgo, today);
-    return computeBurnout(mins);
+    // Compute longest block for each day that has data
+    const blockPerDay = mins.map(d => ({
+      date: d.date,
+      block: getLongestContinuousBlockMinutes(d.date),
+    }));
+    return computeBurnout(mins, blockPerDay);
   }, [weekAgo, today]);
 
-  // Download dialog
+  // ── FAB / download ────────────────────────────────────────────────────────
   const [downloadDialog, setDownloadDialog] = useState(false);
   const llama = useLlama();
   const { isDownloaded, isDownloading, startDownload } = llama;
 
-  // Navigate to full-screen chat
   const handleFABPress = useCallback(() => {
     if (!isDownloaded && !isDownloading) {
       setDownloadDialog(true);
     } else if (isDownloaded) {
       router.push('/chat' as any);
     }
-    // If downloading, do nothing (show progress on FAB)
   }, [isDownloaded, isDownloading, router]);
 
   const RISK_COLOR: Record<Risk, string> = {
@@ -312,6 +460,50 @@ export default function AIScreen() {
     High: 'fire',
   };
 
+  // ── Ring definitions ───────────────────────────────────────────────────────
+  // Goal: 8 scheduled hours for outer ring
+  const HOUR_GOAL = 8 * 60; // minutes
+  const scheduledProgress = todayStats.scheduledMinutes / HOUR_GOAL;
+  const completionProgress = todayStats.total > 0 ? todayStats.completed / todayStats.total : 0;
+  const focusProgress = todayStats.focusTotal > 0 ? todayStats.focusCompleted / todayStats.focusTotal : 0;
+
+  const scheduledHoursLabel =
+    todayStats.scheduledMinutes >= 60
+      ? `${(todayStats.scheduledMinutes / 60).toFixed(1)}h`
+      : `${todayStats.scheduledMinutes}m`;
+
+  const rings: RingDef[] = [
+    {
+      value: scheduledProgress,
+      color: colors.primary,
+      trackColor: `${colors.primary}18`,
+      radius: 76,
+      strokeWidth: 12,
+      label: 'Scheduled',
+      detail: scheduledHoursLabel,
+    },
+    {
+      value: completionProgress,
+      color: colors.secondary,
+      trackColor: `${colors.secondary}20`,
+      radius: 58,
+      strokeWidth: 11,
+      label: 'Completed',
+      detail: `${todayStats.completed}/${todayStats.total}`,
+    },
+    {
+      value: focusProgress,
+      color: colors.tertiary,
+      trackColor: `${colors.tertiary}22`,
+      radius: 41,
+      strokeWidth: 10,
+      label: 'Focus done',
+      detail: `${todayStats.focusCompleted}/${todayStats.focusTotal}`,
+    },
+  ];
+
+  const todayLabel = new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+
   return (
     <View style={[styles.root, { backgroundColor: colors.background }]}>
       <ScreenHeader subtitle="AI & Insights" />
@@ -320,31 +512,34 @@ export default function AIScreen() {
         contentContainerStyle={[styles.content, { paddingBottom: 120 + insets.bottom }]}
         showsVerticalScrollIndicator={false}
       >
-        {/* ── Workload Heatmap + Streak card ──────────────────────────────── */}
+
+        {/* ── Activity Rings card ───────────────────────────────────────────── */}
+        <View style={[styles.card, { backgroundColor: colors.surfaceContainerLowest, borderColor: colors.outlineVariant }]}>
+          <View style={styles.cardHeader}>
+            <View>
+              <LabelMd color={colors.onSurface}>Today's Activity</LabelMd>
+              <LabelSm color={colors.onSurfaceVariant}>{todayLabel}</LabelSm>
+            </View>
+            {todayStats.total === 0 && (
+              <View style={[styles.emptyBadge, { backgroundColor: colors.surfaceContainerHigh, borderColor: colors.outlineVariant }]}>
+                <LabelSm color={colors.onSurfaceVariant} style={{ fontSize: 10 }}>No events yet</LabelSm>
+              </View>
+            )}
+          </View>
+
+          <ActivityRingsWidget
+            rings={rings}
+            centerLabel={scheduledHoursLabel}
+            centerSub="today"
+          />
+        </View>
+
+        {/* ── Workload Heatmap card ─────────────────────────────────────────── */}
         <View style={[styles.card, { backgroundColor: colors.surfaceContainerLowest, borderColor: colors.outlineVariant }]}>
           <View style={styles.cardHeader}>
             <View>
               <LabelMd color={colors.onSurface}>Workload Consistency</LabelMd>
               <LabelSm color={colors.onSurfaceVariant}>Completed events per day · 10 weeks</LabelSm>
-            </View>
-            {/* Streak badge */}
-            <View style={[styles.streakBadge, {
-              backgroundColor: streak > 0 ? `${colors.primary}15` : colors.surfaceContainerHigh,
-              borderColor: streak > 0 ? `${colors.primary}40` : colors.outlineVariant,
-            }]}>
-              <MaterialCommunityIcons
-                name={streak > 0 ? 'fire' : 'fire-off'}
-                size={20}
-                color={streak > 0 ? colors.primary : colors.outline}
-              />
-              <View>
-                <LabelSm style={[styles.streakNum, { color: streak > 0 ? colors.primary : colors.outline }]}>
-                  {streak}
-                </LabelSm>
-                <LabelSm style={{ fontSize: 8, color: colors.onSurfaceVariant, letterSpacing: 0.5 }}>
-                  DAY{streak !== 1 ? 'S' : ''}
-                </LabelSm>
-              </View>
             </View>
           </View>
 
@@ -354,19 +549,9 @@ export default function AIScreen() {
             <LabelSm color={colors.onSurfaceVariant} style={{ fontSize: 9 }}>10 wks ago</LabelSm>
             <LabelSm color={colors.onSurfaceVariant} style={{ fontSize: 9 }}>Today</LabelSm>
           </View>
-
-          {streak === 0 ? (
-            <LabelSm color={colors.onSurfaceVariant} style={{ marginTop: spacing.sm }}>
-              No active streak — schedule events to start one.
-            </LabelSm>
-          ) : (
-            <LabelSm color={colors.onSurfaceVariant} style={{ marginTop: spacing.sm }}>
-              🔥 {streak}-day streak · Longest: {longestStreak} day{longestStreak !== 1 ? 's' : ''}
-            </LabelSm>
-          )}
         </View>
 
-        {/* ── Burnout Risk card ────────────────────────────────────────────── */}
+        {/* ── Burnout Risk card ─────────────────────────────────────────────── */}
         <View style={[styles.card, { backgroundColor: colors.surfaceContainerLowest, borderColor: colors.outlineVariant }]}>
           <View style={styles.burnoutHeader}>
             <MaterialCommunityIcons
@@ -383,8 +568,34 @@ export default function AIScreen() {
             </View>
           </View>
 
+          {/* Stats row */}
+          <View style={[styles.burnoutStats, { borderColor: colors.outlineVariant }]}>
+            <View style={styles.burnoutStat}>
+              <LabelMd style={[styles.statNum, { color: colors.onSurface }]}>
+                {burnout.avgActiveHours.toFixed(1)}h
+              </LabelMd>
+              <LabelSm color={colors.onSurfaceVariant} style={styles.statLabel}>avg/active day</LabelSm>
+            </View>
+            <View style={[styles.statDivider, { backgroundColor: colors.outlineVariant }]} />
+            <View style={styles.burnoutStat}>
+              <LabelMd style={[styles.statNum, { color: burnout.heavyDays >= 4 ? colors.error : colors.onSurface }]}>
+                {burnout.heavyDays}
+              </LabelMd>
+              <LabelSm color={colors.onSurfaceVariant} style={styles.statLabel}>heavy days</LabelSm>
+            </View>
+            <View style={[styles.statDivider, { backgroundColor: colors.outlineVariant }]} />
+            <View style={styles.burnoutStat}>
+              <LabelMd style={[styles.statNum, { color: burnout.maxBlockMinutes >= 210 ? colors.error : colors.onSurface }]}>
+                {burnout.maxBlockMinutes >= 60
+                  ? `${(burnout.maxBlockMinutes / 60).toFixed(1)}h`
+                  : `${burnout.maxBlockMinutes}m`}
+              </LabelMd>
+              <LabelSm color={colors.onSurfaceVariant} style={styles.statLabel}>longest block</LabelSm>
+            </View>
+          </View>
+
           <LabelSm color={colors.onSurfaceVariant} style={styles.avgLine}>
-            Avg {burnout.avgHours.toFixed(1)} h/day · {burnout.daysWithData} day{burnout.daysWithData !== 1 ? 's' : ''} of data this week
+            Based on {burnout.daysWithData} day{burnout.daysWithData !== 1 ? 's' : ''} of data this week
           </LabelSm>
 
           <View style={[styles.recoBox, { backgroundColor: colors.surfaceContainerLow, borderColor: colors.outlineVariant }]}>
@@ -398,7 +609,7 @@ export default function AIScreen() {
         </View>
       </ScrollView>
 
-      {/* ── AI pill button ──────────────────────────────────────────────────── */}
+      {/* ── AI pill FAB ──────────────────────────────────────────────────────── */}
       <View style={[styles.fabContainer, { bottom: 90 + insets.bottom }]}>
         <TouchableOpacity
           style={[
@@ -408,7 +619,6 @@ export default function AIScreen() {
           onPress={handleFABPress}
           activeOpacity={0.85}
         >
-          {/* Progress bar inside pill during download */}
           {isDownloading && (
             <View
               style={[
@@ -439,7 +649,6 @@ export default function AIScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Download confirmation dialog */}
       <Dialog
         visible={downloadDialog}
         title="Download AI Model?"
@@ -448,10 +657,7 @@ export default function AIScreen() {
           { label: 'Cancel', onPress: () => setDownloadDialog(false) },
           {
             label: 'Download', primary: true,
-            onPress: () => {
-              setDownloadDialog(false);
-              startDownload();
-            },
+            onPress: () => { setDownloadDialog(false); startDownload(); },
           },
         ]}
         onDismiss={() => setDownloadDialog(false)}
@@ -461,7 +667,6 @@ export default function AIScreen() {
 }
 
 // ── Styles ────────────────────────────────────────────────────────────────────
-
 const styles = StyleSheet.create({
   root: { flex: 1 },
   content: { paddingHorizontal: spacing.marginMobile, paddingTop: spacing.lg },
@@ -478,19 +683,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: spacing.md,
   },
-  streakBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
+  emptyBadge: {
     paddingHorizontal: spacing.sm,
-    paddingVertical: 6,
+    paddingVertical: 4,
     borderRadius: radius.full,
     borderWidth: 1,
-  },
-  streakNum: {
-    fontSize: 18,
-    fontWeight: '700',
-    lineHeight: 20,
   },
   heatFooter: {
     flexDirection: 'row',
@@ -498,11 +695,12 @@ const styles = StyleSheet.create({
     marginTop: spacing.xs,
   },
 
+  // Burnout
   burnoutHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.xs,
-    marginBottom: spacing.xs,
+    marginBottom: spacing.md,
   },
   riskChip: {
     paddingHorizontal: spacing.sm,
@@ -511,7 +709,34 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     marginLeft: 'auto',
   },
-  avgLine: { marginBottom: spacing.md, fontSize: 12 },
+  burnoutStats: {
+    flexDirection: 'row',
+    borderWidth: 1,
+    borderRadius: radius.md,
+    marginBottom: spacing.sm,
+    overflow: 'hidden',
+  },
+  burnoutStat: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: spacing.sm,
+    gap: 2,
+  },
+  statNum: {
+    fontSize: 20,
+    fontWeight: '700',
+    lineHeight: 24,
+  },
+  statLabel: {
+    fontSize: 10,
+    textAlign: 'center',
+    opacity: 0.7,
+  },
+  statDivider: {
+    width: 1,
+    marginVertical: spacing.sm,
+  },
+  avgLine: { marginBottom: spacing.md, fontSize: 11, opacity: 0.7 },
   recoBox: {
     borderRadius: radius.md,
     borderWidth: 1,

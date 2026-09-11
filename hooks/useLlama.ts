@@ -37,9 +37,15 @@ interface UseLlamaReturn {
   clearMessages: () => void;
 }
 
+// Max turns kept in the sliding history window sent to the model.
+// Older turns are dropped to prevent overflowing the 2048-token context.
+const MAX_HISTORY_TURNS = 10;
+
+const GREETING_TEXT = "Hi! I'm your offline scheduling assistant. Ask me anything about your day.";
+
 const INITIAL_GREETING: ChatMessage = {
   role: 'ai',
-  text: "Hi! I'm your offline scheduling assistant. Ask me anything about your day.",
+  text: GREETING_TEXT,
 };
 
 export function useLlama(): UseLlamaReturn {
@@ -51,8 +57,11 @@ export function useLlama(): UseLlamaReturn {
   const [isThinking, setIsThinking] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([INITIAL_GREETING]);
 
-  // Keep a ref to conversation history for multi-turn context
-  const historyRef = useRef<Array<{ role: 'user' | 'assistant'; text: string }>>([]);
+  // Keep a ref to the full conversation history.
+  // Seeded with the greeting so the model knows it already introduced itself.
+  const historyRef = useRef<Array<{ role: 'user' | 'assistant'; text: string }>>(
+    [{ role: 'assistant', text: GREETING_TEXT }]
+  );
   // Ref that mirrors isLoaded — never stale inside callbacks
   const isLoadedRef = useRef(false);
 
@@ -93,6 +102,9 @@ export function useLlama(): UseLlamaReturn {
     isLoadedRef.current = false;
     setIsLoaded(false);
     setDownloadProgress(0);
+    // Reset conversation so stale history isn't fed into a freshly loaded model
+    historyRef.current = [{ role: 'assistant', text: GREETING_TEXT }];
+    setMessages([INITIAL_GREETING]);
   }, []);
 
   // ── Load model on first chat (lazy) ────────────────────────────────────
@@ -126,7 +138,15 @@ export function useLlama(): UseLlamaReturn {
 
         let accumulated = '';
 
-        await llamaService.chat(historyRef.current, events, (token) => {
+        // ── Sliding window: keep only the last MAX_HISTORY_TURNS turns ──────
+        // Each turn = 1 user + 1 assistant message = 2 entries.
+        // We always keep the greeting (index 0) + last N*2 entries after it.
+        const greeting = historyRef.current[0];
+        const tail = historyRef.current.slice(1);
+        const windowedTail = tail.slice(-MAX_HISTORY_TURNS * 2);
+        const windowedHistory = greeting ? [greeting, ...windowedTail] : windowedTail;
+
+        await llamaService.chat(windowedHistory, events, (token) => {
           accumulated += token;
           // Update the last message in place as tokens stream in
           setMessages((prev) => {
@@ -172,7 +192,8 @@ export function useLlama(): UseLlamaReturn {
   );
 
   const clearMessages = useCallback(() => {
-    historyRef.current = [];
+    // Re-seed history with greeting so model never re-greets after clear
+    historyRef.current = [{ role: 'assistant', text: GREETING_TEXT }];
     setMessages([INITIAL_GREETING]);
   }, []);
 

@@ -135,3 +135,77 @@ export function eventExists(title: string, date: string, startTime: string): boo
   );
   return (result?.count ?? 0) > 0;
 }
+
+// ── Analytics helpers ─────────────────────────────────────────────────────────
+
+/** Today's event stats for the Activity Rings widget */
+export function getTodayEventStats(date: string): {
+  total: number;
+  completed: number;
+  focusTotal: number;
+  focusCompleted: number;
+  scheduledMinutes: number;
+} {
+  const db = getDb();
+  const rows = db.getAllSync<{
+    completed: number;
+    category: string;
+    start_time: string;
+    end_time: string | null;
+  }>(
+    `SELECT completed, category, start_time, end_time FROM events WHERE date = ?`,
+    [date]
+  );
+
+  let total = 0, completed = 0, focusTotal = 0, focusCompleted = 0, scheduledMinutes = 0;
+  for (const r of rows) {
+    total++;
+    if (r.completed) completed++;
+    if (r.category === 'focus') {
+      focusTotal++;
+      if (r.completed) focusCompleted++;
+    }
+    if (r.end_time) {
+      const [sh, sm] = r.start_time.split(':').map(Number);
+      const [eh, em] = r.end_time.split(':').map(Number);
+      const mins = (eh * 60 + em) - (sh * 60 + sm);
+      if (mins > 0) scheduledMinutes += mins;
+    }
+  }
+  return { total, completed, focusTotal, focusCompleted, scheduledMinutes };
+}
+
+/** Longest continuous scheduled block (no gap > 15 min) across all events on a date.
+ *  Returns minutes. Used by burnout algorithm to detect no-break days. */
+export function getLongestContinuousBlockMinutes(date: string): number {
+  const db = getDb();
+  const rows = db.getAllSync<{ start_time: string; end_time: string }>(
+    `SELECT start_time, end_time FROM events WHERE date = ? AND end_time IS NOT NULL ORDER BY start_time ASC`,
+    [date]
+  );
+  if (rows.length === 0) return 0;
+
+  const GAP_THRESHOLD = 15; // minutes — gaps larger than this break the chain
+  let maxBlock = 0;
+  let blockStart = -1;
+  let blockEnd = -1;
+
+  for (const r of rows) {
+    const [sh, sm] = r.start_time.split(':').map(Number);
+    const [eh, em] = r.end_time.split(':').map(Number);
+    const s = sh * 60 + sm;
+    const e = eh * 60 + em;
+    if (e <= s) continue;
+
+    if (blockStart === -1) {
+      blockStart = s; blockEnd = e;
+    } else if (s - blockEnd <= GAP_THRESHOLD) {
+      blockEnd = Math.max(blockEnd, e); // extend chain
+    } else {
+      maxBlock = Math.max(maxBlock, blockEnd - blockStart);
+      blockStart = s; blockEnd = e;
+    }
+  }
+  if (blockStart !== -1) maxBlock = Math.max(maxBlock, blockEnd - blockStart);
+  return maxBlock;
+}

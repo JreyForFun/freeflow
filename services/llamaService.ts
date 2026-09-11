@@ -194,11 +194,18 @@ export async function chat(
   await _context.completion(
     {
       messages,
-      n_predict: 256,       // max tokens to generate
+      n_predict: 200,       // reduced from 256 — leaves room for history in 2048-token window
       temperature: 0.7,
       top_p: 0.9,
       top_k: 40,
-      stop: ['</s>', '<|im_end|>', '<|endoftext|>', 'User:', 'Human:'],
+      // Repeat penalty — critical for small models to stop echoing prior tokens
+      penalty_repeat: 1.15,
+      penalty_last_n: 64,
+      stop: [
+        '</s>', '<|im_end|>', '<|endoftext|>',
+        'User:', 'Human:', 'Assistant:',   // prevent model roleplaying both sides
+        '\nUser:', '\nHuman:', '\nAssistant:',
+      ],
     },
     (data) => {
       const token = data.token;
