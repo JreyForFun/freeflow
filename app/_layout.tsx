@@ -16,7 +16,12 @@ import {
 } from '@expo-google-fonts/source-serif-4';
 import { runMigrations } from '@/db/schema';
 import { ThemeProvider, useTheme } from '@/theme/ThemeContext';
-import { setupNotificationChannel } from '@/services/notificationService';
+import {
+  setupNotificationChannel,
+  scheduleAllNotifications,
+  getNotificationEnabled,
+} from '@/services/notificationService';
+import { getEventsByDate } from '@/db/events';
 import { ModalVisibilityProvider } from '@/hooks/useModalVisibility';
 import { TimeFormatProvider } from '@/hooks/useTimeFormatContext';
 
@@ -51,6 +56,13 @@ export default function RootLayout() {
       console.error('DB migration failed:', e);
     }
     setupNotificationChannel().catch(() => {});
+
+    // Schedule all notifications for today if the user has enabled them
+    if (getNotificationEnabled()) {
+      const today = new Date().toISOString().slice(0, 10);
+      const todayEvents = getEventsByDate(today);
+      scheduleAllNotifications(todayEvents).catch(() => {});
+    }
   }, []);
 
   useEffect(() => {

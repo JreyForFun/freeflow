@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useEffect } from 'react';
 import { View, StyleSheet } from 'react-native';
 import {
   Gesture,
@@ -84,9 +84,12 @@ export function DraggableEventBlock({
   const entranceOpacity = useSharedValue(0);
   const entranceSlide = useSharedValue(8);
 
-  // Trigger entrance on mount (runs once on UI thread)
-  entranceOpacity.value = withTiming(1, { duration: 220 });
-  entranceSlide.value = withSpring(0, { damping: 22, stiffness: 280 });
+  // Trigger entrance only on mount — not on every re-render
+  useEffect(() => {
+    entranceOpacity.value = withTiming(1, { duration: 220 });
+    entranceSlide.value = withSpring(0, { damping: 22, stiffness: 280 });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const isPast = new Date() > new Date(`${event.date}T${event.end_time ?? event.start_time}`);
 

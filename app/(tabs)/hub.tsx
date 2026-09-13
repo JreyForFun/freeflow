@@ -208,9 +208,13 @@ export default function HubScreen() {
         });
         added++;
       }
+      const dateLabel =
+        date === todayISO() ? 'today' :
+        date === tomorrowISO() ? 'tomorrow' :
+        new Date(date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
       showToast(skipped > 0
         ? `Added ${added} block${added !== 1 ? 's' : ''}, ${skipped} already existed`
-        : `Added ${added} block${added !== 1 ? 's' : ''} to today ✓`
+        : `Added ${added} block${added !== 1 ? 's' : ''} to ${dateLabel} ✓`
       );
     } catch (e) {
       showToast('Error applying template');

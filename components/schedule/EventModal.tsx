@@ -14,7 +14,8 @@ import { Dialog } from '@/components/ui/Dialog';
 import { useThemeColors } from '@/theme/ThemeContext';
 import { colors, spacing, radius, typography } from '@/theme/tokens';
 import { randomUUID } from 'expo-crypto';
-import { getTimeFormatPref, formatTime } from '@/hooks/useTimeFormat';
+import { formatTime } from '@/hooks/useTimeFormat';
+import { useTimeFormatCtx } from '@/hooks/useTimeFormatContext';
 
 interface EventModalProps {
   event: Event | null;
@@ -35,6 +36,7 @@ const CATEGORY_COLORS: Record<string, string> = {
 
 export function EventModal({ event, tasks, visible, onClose, onTasksChanged, onEdit, onDelete }: EventModalProps) {
   const themeColors = useThemeColors();
+  const { timeFmt } = useTimeFormatCtx();
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [deleteDialog, setDeleteDialog] = useState(false);
 
@@ -66,9 +68,8 @@ export function EventModal({ event, tasks, visible, onClose, onTasksChanged, onE
 
   if (!event) return null;
 
-  const fmt = getTimeFormatPref();
-  const timeLabel = formatTime(event.start_time, fmt) +
-    (event.end_time ? ` – ${formatTime(event.end_time, fmt)}` : '');
+  const timeLabel = formatTime(event.start_time, timeFmt) +
+    (event.end_time ? ` – ${formatTime(event.end_time, timeFmt)}` : '');
   const categoryColor = CATEGORY_COLORS[event.category] ?? colors.surfaceContainerHigh;
 
   return (

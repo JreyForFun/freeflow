@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { View, Animated, StyleSheet } from 'react-native';
 import { LabelSm } from '@/components/ui/Typography';
-import { colors, timeline } from '@/theme/tokens';
+import { timeline } from '@/theme/tokens';
+import { useThemeColors } from '@/theme/ThemeContext';
 
 function getCurrentY(): number {
   const now = new Date();
@@ -15,6 +16,7 @@ function formatNow(): string {
 }
 
 export function CurrentTimeLine() {
+  const themeColors = useThemeColors();
   const animY = useRef(new Animated.Value(getCurrentY())).current;
   const [timeLabel, setTimeLabel] = useState(formatNow);
 
@@ -30,9 +32,9 @@ export function CurrentTimeLine() {
 
   return (
     <Animated.View style={[styles.container, { top: animY }]}>
-      <LabelSm color={colors.primary} style={styles.label}>{timeLabel}</LabelSm>
-      <View style={styles.dot} />
-      <View style={styles.line} />
+      <LabelSm color={themeColors.primary} style={[styles.label, { color: themeColors.primary }]}>{timeLabel}</LabelSm>
+      <View style={[styles.dot, { backgroundColor: themeColors.primary }]} />
+      <View style={[styles.line, { backgroundColor: themeColors.primary }]} />
     </Animated.View>
   );
 }
@@ -50,20 +52,17 @@ const styles = StyleSheet.create({
   label: {
     width: 42,
     textAlign: 'right',
-    color: colors.primary,
     fontSize: 10,
   },
   dot: {
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: colors.primary,
     marginHorizontal: 2,
   },
   line: {
     flex: 1,
     height: 1.5,
-    backgroundColor: colors.primary,
     opacity: 0.8,
   },
 });

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View, ScrollView, TouchableOpacity,
   StyleSheet, Switch,
@@ -21,21 +21,11 @@ import {
 } from '@/hooks/useTimeFormat';
 import { useTimeFormatCtx } from '@/hooks/useTimeFormatContext';
 import {
-  scheduleNotification, cancelAllNotifications,
+  scheduleAllNotifications, cancelAllNotifications,
   getNotificationEnabled, setNotificationEnabled,
   requestNotificationPermission,
 } from '@/services/notificationService';
-
-// ── Notification time helpers ─────────────────────────────────────────────────
-function getNotifTimePref(): string {
-  try {
-    const row = getDb().getFirstSync<{ value: string }>("SELECT value FROM settings WHERE key = 'notification_time'");
-    return row?.value ?? '08:00';
-  } catch { return '08:00'; }
-}
-function setNotifTimePref(t: string): void {
-  getDb().runSync("INSERT OR REPLACE INTO settings (key, value) VALUES ('notification_time', ?)", [t]);
-}
+import { getEventsByDate } from '@/db/events';
 
 // ── SettingsRow ────────────────────────────────────────────────────────────────
 function SettingsRow({
@@ -87,7 +77,6 @@ export default function SettingsScreen() {
   const [timeFmt, setTimeFmtLocal] = useState<TimeFormat>('24h');
   const { setTimeFmt: setTimeFmtCtx } = useTimeFormatCtx();
   const [notifEnabled, setNotifEnabled] = useState(false);
-  const [notifTime, setNotifTimeState] = useState('08:00');
   const [removeDialog, setRemoveDialog] = useState(false);
   const [clearDialog, setClearDialog] = useState(false);
   const [toast, setToast] = useState('');
@@ -95,7 +84,6 @@ export default function SettingsScreen() {
   useEffect(() => {
     setTimeFmtLocal(getTimeFormatPref());
     setNotifEnabled(getNotificationEnabled());
-    setNotifTimeState(getNotifTimePref());
   }, []);
 
   // ── Theme ──
@@ -114,10 +102,8 @@ export default function SettingsScreen() {
   // ── Notifications ──
   const handleNotifToggle = async (value: boolean) => {
     if (value) {
-      // Request permission first — if denied, revert the switch
       const granted = await requestNotificationPermission();
       if (!granted) {
-        // Permission denied — show feedback and revert
         setNotifEnabled(false);
         setNotificationEnabled(false);
         setToast('Notification permission denied. Enable it in Settings.');
@@ -126,25 +112,15 @@ export default function SettingsScreen() {
       }
       setNotifEnabled(true);
       setNotificationEnabled(true);
-      const [h, m] = notifTime.split(':').map(Number);
-      await scheduleNotification(h, m);
+      const today = new Date().toISOString().slice(0, 10);
+      const todayEvents = getEventsByDate(today);
+      await scheduleAllNotifications(todayEvents);
     } else {
       setNotifEnabled(false);
       setNotificationEnabled(false);
       await cancelAllNotifications();
     }
   };
-
-  const adjustNotifHour = useCallback(async (delta: number) => {
-    const [h, m] = notifTime.split(':').map(Number);
-    const newH = ((h + delta + 24) % 24);
-    const newTime = `${String(newH).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-    setNotifTimeState(newTime);
-    setNotifTimePref(newTime);
-    if (notifEnabled) {
-      await scheduleNotification(newH, m);
-    }
-  }, [notifTime, notifEnabled]);
 
   // ── AI model ──
   const handleModelDownload = () => {
@@ -189,22 +165,6 @@ export default function SettingsScreen() {
               />
             }
           />
-          {notifEnabled && (
-            <>
-              <Divider />
-              <View style={styles.notifTimeRow}>
-                <MaterialCommunityIcons name="clock-outline" size={18} color={colors.outline} style={styles.rowIcon} />
-                <LabelMd color={colors.onSurface} style={styles.rowLabel}>Reminder time</LabelMd>
-                <TouchableOpacity onPress={() => adjustNotifHour(-1)} style={styles.hourBtn}>
-                  <MaterialCommunityIcons name="chevron-left" size={20} color={colors.primary} />
-                </TouchableOpacity>
-                <LabelMd color={colors.primary} style={styles.hourLabel}>{notifTime}</LabelMd>
-                <TouchableOpacity onPress={() => adjustNotifHour(1)} style={styles.hourBtn}>
-                  <MaterialCommunityIcons name="chevron-right" size={20} color={colors.primary} />
-                </TouchableOpacity>
-              </View>
-            </>
-          )}
           <Divider />
 
           {/* App Theme */}
@@ -379,14 +339,6 @@ const styles = StyleSheet.create({
   },
   rowIcon: { marginRight: spacing.md },
   rowLabel: { flex: 1 },
-  notifTimeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md,
-  },
-  hourBtn: { padding: spacing.xs },
-  hourLabel: { minWidth: 44, textAlign: 'center' },
   divider: { height: 1, marginLeft: spacing.md + 20 + spacing.md },
   chipBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   downloadBtn: {

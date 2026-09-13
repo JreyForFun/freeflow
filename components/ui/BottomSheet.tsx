@@ -16,7 +16,7 @@
  *   </BottomSheet>
  */
 
-import React, { useCallback, useEffect } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import {
   View, StyleSheet, TouchableWithoutFeedback,
   KeyboardAvoidingView, Platform, Dimensions,
@@ -58,16 +58,21 @@ export function BottomSheet({
   const backdropOpacity = useSharedValue(0);
   // Controls whether the sheet is actually rendered in the tree
   const [mounted, setMounted] = React.useState(false);
+  // Tracks whether close() was already called internally (backdrop/swipe)
+  // so the visible=false useEffect doesn't call hideModal() a second time.
+  const closedInternally = useRef(false);
 
   const open = useCallback(() => {
     // Ensure sheet starts off-screen before animating in
     translateY.value = SCREEN_HEIGHT;
     backdropOpacity.value = 0;
+    closedInternally.current = false;
     setMounted(true);
     showModal();
   }, [backdropOpacity, translateY, showModal]);
 
   const close = useCallback(() => {
+    closedInternally.current = true;
     backdropOpacity.value = withTiming(0, { duration: 180 });
     translateY.value = withSpring(SCREEN_HEIGHT, SPRING_CONFIG, (finished) => {
       if (finished) runOnJS(setMounted)(false);
@@ -90,11 +95,15 @@ export function BottomSheet({
     if (visible) {
       open();
     } else if (mounted) {
+      // Only call hideModal if close() wasn't already called internally
+      // (to prevent double-decrement of modalCount)
+      if (!closedInternally.current) {
+        hideModal();
+      }
       backdropOpacity.value = withTiming(0, { duration: 180 });
       translateY.value = withSpring(SCREEN_HEIGHT, SPRING_CONFIG, (finished) => {
         if (finished) runOnJS(setMounted)(false);
       });
-      hideModal();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
