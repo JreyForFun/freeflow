@@ -10,6 +10,12 @@
  * - Hides navbar while open (via ModalVisibilityContext)
  * - Horizontal margin so it doesn't stretch edge-to-edge
  *
+ * NavBar visibility contract:
+ *   showModal() and hideModal() are called ONLY inside the `visible` prop
+ *   effect, keyed off an `isOpen` ref so they fire exactly once per open/close
+ *   transition regardless of how many re-renders occur. This prevents the
+ *   navbar from getting stuck hidden due to double hide() calls.
+ *
  * Usage:
  *   <BottomSheet visible={show} onClose={() => setShow(false)}>
  *     <Text>Content here</Text>
@@ -56,50 +62,29 @@ export function BottomSheet({
 
   const translateY = useSharedValue(SCREEN_HEIGHT);
   const backdropOpacity = useSharedValue(0);
-  // Controls whether the sheet is actually rendered in the tree
   const [mounted, setMounted] = React.useState(false);
-  // Tracks whether close() was already called internally (backdrop/swipe)
-  // so the visible=false useEffect doesn't call hideModal() a second time.
-  const closedInternally = useRef(false);
 
-  const open = useCallback(() => {
-    // Ensure sheet starts off-screen before animating in
-    translateY.value = SCREEN_HEIGHT;
-    backdropOpacity.value = 0;
-    closedInternally.current = false;
-    setMounted(true);
-    showModal();
-  }, [backdropOpacity, translateY, showModal]);
+  // Tracks whether the sheet is currently "logically open" from the context's
+  // perspective. Using a ref (not state) ensures the visible-prop effect sees
+  // the latest value synchronously without waiting for a re-render.
+  const isOpen = useRef(false);
 
-  const close = useCallback(() => {
-    closedInternally.current = true;
-    backdropOpacity.value = withTiming(0, { duration: 180 });
-    translateY.value = withSpring(SCREEN_HEIGHT, SPRING_CONFIG, (finished) => {
-      if (finished) runOnJS(setMounted)(false);
-    });
-    hideModal();
-    onClose();
-  }, [backdropOpacity, translateY, onClose, hideModal]);
-
-  // Trigger open animation AFTER mounted=true so layout exists
+  // ── SOLE source of truth for showModal / hideModal ─────────────────────────
+  // Called once per TRUE open/close transition (guarded by isOpen ref).
+  // This prevents double-hide when the user taps a button inside the sheet
+  // (which calls onClose → parent sets visible=false → this effect fires).
   useEffect(() => {
-    if (mounted) {
-      backdropOpacity.value = withTiming(1, { duration: 200 });
-      translateY.value = withSpring(0, SPRING_CONFIG);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mounted]);
-
-  // React to visible prop changes
-  useEffect(() => {
-    if (visible) {
-      open();
-    } else if (mounted) {
-      // Only call hideModal if close() wasn't already called internally
-      // (to prevent double-decrement of modalCount)
-      if (!closedInternally.current) {
-        hideModal();
-      }
+    if (visible && !isOpen.current) {
+      // Closed → Open
+      isOpen.current = true;
+      translateY.value = SCREEN_HEIGHT;
+      backdropOpacity.value = 0;
+      setMounted(true);
+      showModal();
+    } else if (!visible && isOpen.current) {
+      // Open → Closed
+      isOpen.current = false;
+      hideModal();
       backdropOpacity.value = withTiming(0, { duration: 180 });
       translateY.value = withSpring(SCREEN_HEIGHT, SPRING_CONFIG, (finished) => {
         if (finished) runOnJS(setMounted)(false);
@@ -107,6 +92,23 @@ export function BottomSheet({
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
+
+  // Animate in after the component mounts (layout must exist first).
+  // Guard with isOpen.current: if the sheet was quickly closed before this
+  // effect fired, we must NOT play the open animation.
+  useEffect(() => {
+    if (mounted && isOpen.current) {
+      backdropOpacity.value = withTiming(1, { duration: 200 });
+      translateY.value = withSpring(0, SPRING_CONFIG);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mounted]);
+
+  // Backdrop tap: calls onClose() → parent sets visible=false → effect above
+  // handles hideModal() + animation. No direct modal-count call here.
+  const close = useCallback(() => {
+    onClose();
+  }, [onClose]);
 
   const backdropStyle = useAnimatedStyle(() => ({
     opacity: backdropOpacity.value,
@@ -119,7 +121,7 @@ export function BottomSheet({
   if (!mounted && !visible) return null;
 
   return (
-    <View style={StyleSheet.absoluteFill} pointerEvents={mounted ? 'auto' : 'none'}>
+    <View style={StyleSheet.absoluteFill} pointerEvents={visible && mounted ? 'auto' : 'none'}>
       {/* Backdrop */}
       <TouchableWithoutFeedback onPress={close}>
         <Animated.View

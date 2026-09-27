@@ -39,8 +39,13 @@ function getScrollTarget(): number {
 // Hour indices 0–23
 const HOUR_INDICES = Array.from({ length: 24 }, (_, i) => i);
 
+// 30-min tick positions (between each pair of hours): 0:30, 1:30 … 22:30
+const HALF_HOUR_TOPS = Array.from({ length: 23 }, (_, i) => (i + 0.5) * timeline.hourHeight);
+
 // ── Overlap column layout ─────────────────────────────────────────────────────
-// Each event gets a column index + totalColumns so they sit side-by-side
+// Uses Union-Find to cluster overlapping events, then greedily assigns columns.
+// Guarantees all events in the same visual cluster share the same totalColumns
+// so column widths are consistent and events never occlude each other.
 interface EventLayout {
   event: Event;
   column: number;
@@ -54,33 +59,56 @@ function computeEventLayout(events: Event[]): EventLayout[] {
     timeToMinutes(a.start_time) - timeToMinutes(b.start_time)
   );
 
-  // Group into collision clusters
-  const layouts: EventLayout[] = sorted.map((e) => ({ event: e, column: 0, totalColumns: 1 }));
+  const layouts: EventLayout[] = sorted.map(e => ({ event: e, column: 0, totalColumns: 1 }));
 
-  // For each event, find all events that overlap with it
+  // ── Union-Find ──
+  const parent = sorted.map((_, i) => i);
+  function find(x: number): number {
+    if (parent[x] !== x) parent[x] = find(parent[x]);
+    return parent[x];
+  }
+
+  // Union all directly-overlapping pairs
   for (let i = 0; i < sorted.length; i++) {
-    const aStart = timeToMinutes(sorted[i].start_time);
-    const aEnd = sorted[i].end_time ? timeToMinutes(sorted[i].end_time!) : aStart + 60;
-
-    const overlapping = [i]; // indices that overlap with event i
-    for (let j = 0; j < sorted.length; j++) {
-      if (i === j) continue;
-      const bStart = timeToMinutes(sorted[j].start_time);
-      const bEnd = sorted[j].end_time ? timeToMinutes(sorted[j].end_time!) : bStart + 60;
-      if (aStart < bEnd && aEnd > bStart) {
-        overlapping.push(j);
+    const aS = timeToMinutes(sorted[i].start_time);
+    const aE = sorted[i].end_time ? timeToMinutes(sorted[i].end_time!) : aS + 60;
+    for (let j = i + 1; j < sorted.length; j++) {
+      const bS = timeToMinutes(sorted[j].start_time);
+      const bE = sorted[j].end_time ? timeToMinutes(sorted[j].end_time!) : bS + 60;
+      if (aS < bE && aE > bS) {
+        parent[find(i)] = find(j);
       }
     }
+  }
 
-    // Assign columns within the overlap group
-    const usedColumns = new Set<number>();
-    for (const idx of overlapping) {
-      if (idx !== i) usedColumns.add(layouts[idx].column);
+  // Group indices by cluster root
+  const clusters = new Map<number, number[]>();
+  for (let i = 0; i < sorted.length; i++) {
+    const root = find(i);
+    if (!clusters.has(root)) clusters.set(root, []);
+    clusters.get(root)!.push(i);
+  }
+
+  // Greedy column assignment within each cluster
+  for (const indices of clusters.values()) {
+    const colEnds: number[] = []; // earliest end-time that fits in each column
+
+    for (const idx of indices) {
+      const s = timeToMinutes(sorted[idx].start_time);
+      const e = sorted[idx].end_time ? timeToMinutes(sorted[idx].end_time!) : s + 60;
+
+      // Find first column whose last event has already ended
+      let col = 0;
+      while (col < colEnds.length && colEnds[col] > s) col++;
+
+      layouts[idx].column = col;
+      if (col >= colEnds.length) colEnds.push(e);
+      else colEnds[col] = e;
     }
-    let col = 0;
-    while (usedColumns.has(col)) col++;
-    layouts[i].column = col;
-    layouts[i].totalColumns = overlapping.length;
+
+    // All events in cluster share the same totalColumns = actual columns used
+    const maxCol = Math.max(...indices.map(i => layouts[i].column));
+    for (const idx of indices) layouts[idx].totalColumns = maxCol + 1;
   }
 
   return layouts;
@@ -110,20 +138,12 @@ export default function ScheduleScreen() {
     setEvents(getEventsByDate(today));
   }, [today]);
 
-  // Load on mount
-  useEffect(() => {
-    loadEvents();
-  }, [loadEvents]);
+  useEffect(() => { loadEvents(); }, [loadEvents]);
 
-  // ✅ FIX #4 — Reload every time this tab is focused (cross-tab refresh)
-  useFocusEffect(
-    useCallback(() => {
-      loadEvents();
-    }, [loadEvents])
-  );
+  // Reload every time this tab is focused (cross-tab refresh)
+  useFocusEffect(useCallback(() => { loadEvents(); }, [loadEvents]));
 
   // ── Pull-to-refresh ──────────────────────────────────────────────────────────
-  // ✅ FIX #5
   const onRefresh = useCallback(() => {
     setRefreshing(true);
     loadEvents();
@@ -152,7 +172,7 @@ export default function ScheduleScreen() {
     return () => sub.remove();
   }, [scrollToNow, loadEvents]);
 
-  // ── Event modal ──────────────────────────────────────────────────────────────
+  // ── Event modal handlers ──────────────────────────────────────────────────────
   const openEvent = useCallback((event: Event) => {
     setSelectedEvent(event);
     setSelectedTasks(getTasksByEvent(event.id));
@@ -177,16 +197,13 @@ export default function ScheduleScreen() {
     setFormVisible(true);
   }, []);
 
-  const handleDeleteEvent = useCallback(() => {
-    loadEvents();
-  }, [loadEvents]);
+  const handleDeleteEvent = useCallback(() => { loadEvents(); }, [loadEvents]);
 
   const handleFormClose = useCallback(() => {
     setFormVisible(false);
     setEditingEvent(undefined);
   }, []);
 
-  // ✅ FIX #2 — Overlap column layout
   const eventLayouts = computeEventLayout(events);
 
   // ── Render ───────────────────────────────────────────────────────────────────
@@ -194,7 +211,7 @@ export default function ScheduleScreen() {
     <View style={[styles.root, { backgroundColor: colors.background }]}>
       <ScreenHeader subtitle={dateLabel} />
 
-      {/* 24hr Timeline */}
+      {/* 24-hour timeline */}
       <ScrollView
         ref={scrollRef}
         style={styles.scroll}
@@ -210,9 +227,12 @@ export default function ScheduleScreen() {
           />
         }
       >
-        {/* ✅ FIX #1 — Hour grid: anchor rows to height:0, label sits above line */}
+        {/* Hour grid — proper height so label never needs overflow:visible */}
         {HOUR_INDICES.map((hour) => (
-          <View key={hour} style={[styles.hourRow, { top: hour * timeline.hourHeight }]}>
+          <View
+            key={hour}
+            style={[styles.hourRow, { top: hour * timeline.hourHeight - 7 }]}
+          >
             <LabelSm style={[styles.hourLabel, { color: colors.onSurfaceVariant }]}>
               {formatHourLabel(hour, timeFmt)}
             </LabelSm>
@@ -220,7 +240,22 @@ export default function ScheduleScreen() {
           </View>
         ))}
 
-        {/* Events layer */}
+        {/* 30-minute minor ticks — only in the events area, no label */}
+        {HALF_HOUR_TOPS.map((top, i) => (
+          <View
+            key={`hh${i}`}
+            style={[
+              styles.halfHourLine,
+              {
+                top,
+                left: timeline.timeColumnWidth + spacing.xs,
+                backgroundColor: colors.outlineVariant,
+              },
+            ]}
+          />
+        ))}
+
+        {/* Events layer — side-by-side overlapping events */}
         <View style={styles.eventsLayer}>
           {eventLayouts.map(({ event, column, totalColumns }) => {
             const { total, completed } = getTaskCountForEvent(event.id);
@@ -237,13 +272,14 @@ export default function ScheduleScreen() {
               />
             );
           })}
-
-          {/* Current time line (inside events layer) */}
-          <CurrentTimeLine />
         </View>
+
+        {/* Current time indicator — OUTSIDE eventsLayer so it spans the full row
+            including the time-column, aligning its label with hour labels */}
+        <CurrentTimeLine />
       </ScrollView>
 
-      {/* Quick-add pill — taps to open full form */}
+      {/* Quick-add pill */}
       <View style={styles.quickAddBar}>
         <TouchableOpacity
           style={[styles.quickAddInner, { backgroundColor: colors.surfaceContainer, borderColor: `${colors.primary}33` }]}
@@ -288,29 +324,37 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
 
-  // ✅ FIX #1 — row is a zero-height anchor; label floats above the line
+  // Hour row: has actual height (14px) so label never overflows.
+  // Top is shifted by -7 so the center of the row aligns with the hour mark.
   hourRow: {
     position: 'absolute',
     left: 0,
     right: 0,
-    height: 0,                // ← anchor only, no height
+    height: 14,
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    overflow: 'visible',
+    alignItems: 'center',
   },
   hourLabel: {
     width: timeline.timeColumnWidth,
     textAlign: 'right',
     paddingRight: spacing.sm,
-    fontSize: 10,
-    lineHeight: 12,
-    marginTop: -6,            // ← sit label above the grid line
-    opacity: 0.7,
+    fontSize: 9,
+    lineHeight: 11,
+    opacity: 0.65,
   },
   hourLine: {
     flex: 1,
     height: 1,
-    opacity: 0.35,
+    marginRight: spacing.sm,
+    opacity: 0.4,
+  },
+
+  // 30-minute minor tick — short dashed line, no label
+  halfHourLine: {
+    position: 'absolute',
+    right: spacing.sm,
+    height: 1,
+    opacity: 0.18,
   },
 
   eventsLayer: {
@@ -320,6 +364,7 @@ const styles = StyleSheet.create({
     left: timeline.timeColumnWidth + spacing.sm,
     right: spacing.sm,
   },
+
   quickAddBar: {
     paddingHorizontal: spacing.marginMobile,
     paddingTop: spacing.md,

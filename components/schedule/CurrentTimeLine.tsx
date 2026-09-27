@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { View, Animated, StyleSheet } from 'react-native';
 import { LabelSm } from '@/components/ui/Typography';
-import { timeline } from '@/theme/tokens';
+import { timeline, spacing } from '@/theme/tokens';
 import { useThemeColors } from '@/theme/ThemeContext';
 
 function getCurrentY(): number {
@@ -21,7 +21,6 @@ export function CurrentTimeLine() {
   const [timeLabel, setTimeLabel] = useState(formatNow);
 
   useEffect(() => {
-    // Update position AND label every 60 seconds
     const update = () => {
       animY.setValue(getCurrentY());
       setTimeLabel(formatNow());
@@ -31,8 +30,15 @@ export function CurrentTimeLine() {
   }, [animY]);
 
   return (
-    <Animated.View style={[styles.container, { top: animY }]}>
-      <LabelSm color={themeColors.primary} style={[styles.label, { color: themeColors.primary }]}>{timeLabel}</LabelSm>
+    // pointerEvents must be a PROP (not style) so touches pass through to event blocks
+    <Animated.View
+      pointerEvents="none"
+      style={[styles.container, { top: animY }]}
+    >
+      {/* Label sits in the time column so it aligns with the hour labels */}
+      <LabelSm style={[styles.label, { color: themeColors.primary }]}>
+        {timeLabel}
+      </LabelSm>
       <View style={[styles.dot, { backgroundColor: themeColors.primary }]} />
       <View style={[styles.line, { backgroundColor: themeColors.primary }]} />
     </Animated.View>
@@ -47,22 +53,25 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     zIndex: 10,
-    pointerEvents: 'none',
   },
+  // Width = timeColumnWidth + gap so dot starts exactly at events area
   label: {
-    width: 42,
+    width: timeline.timeColumnWidth + spacing.sm,
     textAlign: 'right',
-    fontSize: 10,
+    paddingRight: spacing.xs,
+    fontSize: 9,
+    lineHeight: 11,
   },
   dot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    marginHorizontal: 2,
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    marginRight: 2,
   },
   line: {
     flex: 1,
     height: 1.5,
-    opacity: 0.8,
+    marginRight: spacing.sm,
+    opacity: 0.85,
   },
 });

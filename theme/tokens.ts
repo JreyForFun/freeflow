@@ -215,8 +215,8 @@ export const typography = {
 
 // ── Timeline Constants ────────────────────────────────────────────────────────
 export const timeline = {
-  hourHeight: 64,        // px per hour
-  totalHeight: 64 * 24, // 1536px — full 24hr scroll
+  hourHeight: 80,        // px per hour
+  totalHeight: 80 * 24, // 1920px — full 24hr scroll
   snapMinutes: 15,       // drag snaps to 15-min intervals
   timeColumnWidth: 52,   // left column width for hour labels
 } as const;

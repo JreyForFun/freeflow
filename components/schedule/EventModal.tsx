@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   View, ScrollView, TouchableOpacity,
   TextInput, StyleSheet, KeyboardAvoidingView, Platform,
@@ -39,6 +39,12 @@ export function EventModal({ event, tasks, visible, onClose, onTasksChanged, onE
   const { timeFmt } = useTimeFormatCtx();
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [deleteDialog, setDeleteDialog] = useState(false);
+
+  // Guard: if the bottom sheet is dismissed externally while the delete
+  // confirmation dialog is still open, close it so hideModal is never skipped.
+  useEffect(() => {
+    if (!visible) setDeleteDialog(false);
+  }, [visible]);
 
   const handleToggleTask = useCallback((task: Task) => {
     toggleTask(task.id, task.completed === 0);

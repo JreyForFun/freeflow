@@ -5,10 +5,9 @@ import {
 import Svg, { Circle, G } from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 
 import {
-  getCompletedEventCountPerDay,
   getScheduledMinutesPerDay,
   getTodayEventStats,
   getLongestContinuousBlockMinutes,
@@ -26,28 +25,13 @@ import { useLlama } from '@/hooks/useLlama';
 function todayISO() { return new Date().toISOString().slice(0, 10); }
 
 function subtractDays(from: string, n: number): string {
-  const d = new Date(from); d.setDate(d.getDate() - n);
+  const d = new Date(from + 'T00:00:00'); d.setDate(d.getDate() - n);
   return d.toISOString().slice(0, 10);
-}
-function addDays(from: string, n: number): string {
-  const d = new Date(from); d.setDate(d.getDate() + n);
-  return d.toISOString().slice(0, 10);
-}
-function allDatesBetween(start: string, end: string): string[] {
-  const dates: string[] = [];
-  let cur = start;
-  while (cur <= end) { dates.push(cur); cur = addDays(cur, 1); }
-  return dates;
 }
 
 // ── Activity Rings ────────────────────────────────────────────────────────────
-// Three concentric SVG arc rings — Apple Watch style
-// Ring 1 (outer): scheduled hours today vs 8h goal
-// Ring 2 (middle): events completed vs total today
-// Ring 3 (inner): focus blocks completed vs total today
-
 interface RingDef {
-  value: number;   // 0–1 progress
+  value: number;
   color: string;
   trackColor: string;
   radius: number;
@@ -67,10 +51,8 @@ function ArcRing({
   const dash = circumference * safeProgress;
   const gap = circumference - dash;
 
-  // Rotate so arc starts at top (−90°)
   return (
     <G rotation="-90" origin={`${cx},${cy}`}>
-      {/* Track */}
       <Circle
         cx={cx} cy={cy} r={r}
         strokeWidth={strokeWidth}
@@ -78,7 +60,6 @@ function ArcRing({
         fill="none"
         strokeLinecap="round"
       />
-      {/* Progress — only render when > 0 to avoid dot artifact from strokeLinecap=round */}
       {safeProgress > 0 && (
         <Circle
           cx={cx} cy={cy} r={r}
@@ -109,14 +90,12 @@ function ActivityRingsWidget({
 
   return (
     <View style={ringStyles.container}>
-      {/* SVG rings */}
       <View style={ringStyles.svgWrap}>
         <Svg width={SIZE} height={SIZE}>
           {rings.map((ring, i) => (
             <ArcRing
               key={i}
-              cx={CX}
-              cy={CY}
+              cx={CX} cy={CY}
               r={ring.radius}
               strokeWidth={ring.strokeWidth}
               progress={ring.value}
@@ -125,14 +104,12 @@ function ActivityRingsWidget({
             />
           ))}
         </Svg>
-        {/* Center text overlay */}
         <View style={ringStyles.center} pointerEvents="none">
           <LabelMd style={ringStyles.centerLabel}>{centerLabel}</LabelMd>
           <LabelSm style={ringStyles.centerSub}>{centerSub}</LabelSm>
         </View>
       </View>
 
-      {/* Legend */}
       <View style={ringStyles.legend}>
         {rings.map((ring, i) => (
           <View key={i} style={ringStyles.legendRow}>
@@ -155,193 +132,173 @@ const ringStyles = StyleSheet.create({
     gap: spacing.lg,
     paddingVertical: spacing.sm,
   },
-  svgWrap: {
-    position: 'relative',
-    width: 180,
-    height: 180,
-  },
+  svgWrap: { position: 'relative', width: 180, height: 180 },
   center: {
     position: 'absolute',
     top: 0, left: 0, right: 0, bottom: 0,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  centerLabel: {
-    fontSize: 22,
-    fontWeight: '700',
-    lineHeight: 26,
-  },
-  centerSub: {
-    fontSize: 10,
-    opacity: 0.6,
-    letterSpacing: 0.5,
-    textTransform: 'uppercase',
-  },
-  legend: {
-    flex: 1,
-    gap: spacing.md,
-  },
-  legendRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-  },
-  legendDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-  },
-  legendLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    lineHeight: 18,
-  },
-  legendSub: {
-    fontSize: 11,
-    opacity: 0.6,
-  },
+  centerLabel: { fontSize: 22, fontWeight: '700', lineHeight: 26 },
+  centerSub: { fontSize: 10, opacity: 0.6, letterSpacing: 0.5, textTransform: 'uppercase' },
+  legend: { flex: 1, gap: spacing.md },
+  legendRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  legendDot: { width: 10, height: 10, borderRadius: 5 },
+  legendLabel: { fontSize: 14, fontWeight: '600', lineHeight: 18 },
+  legendSub: { fontSize: 11, opacity: 0.6 },
 });
 
-// ── GitHub-style heatmap ──────────────────────────────────────────────────────
-function heatLevel(count: number): 0 | 1 | 2 | 3 | 4 {
-  if (count === 0) return 0;
-  if (count === 1) return 1;
-  if (count <= 3)  return 2;
-  if (count <= 5)  return 3;
-  return 4;
-}
+// ── Daily Momentum Chart ──────────────────────────────────────────────────────
+// 14-day vertical bar chart showing scheduled hours per day.
+// Completely different from the old heatmap:
+//   - Vertical bars (not grid squares)
+//   - Scheduled HOURS not event count
+//   - Left = oldest day, right = today
+//   - Reference lines at 4h for context
+//   - Today's bar is highlighted with glow
 
-function WorkloadHeatmap({
-  countByDate,
+const BAR_AREA_H = 80;  // px — total chart height
+const GAP = 4;          // px — gap between bars
+const MAX_MINUTES = 8 * 60; // 8h = full bar
+const REF_4H_BOTTOM = (4 / 8) * BAR_AREA_H; // 40px from bottom = 4h mark
+
+function DailyMomentumChart({
+  minutesByDate,
 }: {
-  countByDate: Record<string, number>;
+  minutesByDate: Record<string, number>;
 }) {
   const colors = useThemeColors();
   const today = todayISO();
-  const start = subtractDays(today, 69);
-  const dates = allDatesBetween(start, today);
 
-  const weeks: string[][] = [];
-  let week: string[] = [];
-  const firstDow = (new Date(start).getDay() + 6) % 7;
-  for (let i = 0; i < firstDow; i++) week.push('');
-  for (const d of dates) {
-    week.push(d);
-    if (week.length === 7) { weeks.push(week); week = []; }
-  }
-  if (week.length > 0) { while (week.length < 7) week.push(''); weeks.push(week); }
-
-  const monthLabels: { label: string; col: number }[] = [];
-  weeks.forEach((wk, i) => {
-    const first = wk.find(d => d !== '');
-    if (first) {
-      const d = new Date(first);
-      if (d.getDate() <= 7) {
-        monthLabels.push({ label: d.toLocaleString('default', { month: 'short' }), col: i });
-      }
-    }
-  });
-
-  const DAY_LABELS = ['M', '', 'W', '', 'F', '', ''];
-  const CELL_SIZE = 11;
-  const CELL_GAP = 3;
-
-  const HEAT_COLORS = [
-    colors.surfaceContainerHighest,
-    `${colors.primary}28`,
-    `${colors.primary}55`,
-    `${colors.primary}90`,
-    colors.primary,
-  ];
+  // Last 14 days: oldest on the left, today on the right
+  const days = Array.from({ length: 14 }, (_, i) => subtractDays(today, 13 - i));
 
   return (
-    <View style={{ width: '100%' }}>
-      <View style={[heatStyles.monthRow, { marginLeft: 18 }]}>
-        {monthLabels.map((m, i) => (
-          <LabelSm
-            key={i}
-            style={{
-              position: 'absolute',
-              fontSize: 9,
-              left: m.col * (CELL_SIZE + CELL_GAP),
-              color: colors.onSurfaceVariant,
-            }}
-          >
-            {m.label}
-          </LabelSm>
-        ))}
-      </View>
+    <View>
+      {/* ── Chart area ─────────────────────────────────────────────── */}
+      <View style={{ height: BAR_AREA_H, position: 'relative' }}>
 
-      <View style={{ flexDirection: 'row' }}>
-        <View style={heatStyles.dayLabels}>
-          {DAY_LABELS.map((l, i) => (
-            <LabelSm
-              key={i}
-              style={{ fontSize: 8, height: CELL_SIZE, lineHeight: CELL_SIZE, color: colors.onSurfaceVariant }}
-            >
-              {l}
-            </LabelSm>
-          ))}
+        {/* 4h reference line — sits exactly at the height a 4h bar would reach */}
+        <View style={{
+          position: 'absolute',
+          bottom: REF_4H_BOTTOM,
+          left: 0, right: 0,
+          flexDirection: 'row',
+          alignItems: 'center',
+        }}>
+          <View style={{
+            flex: 1,
+            height: StyleSheet.hairlineWidth,
+            backgroundColor: `${colors.outlineVariant}80`,
+          }} />
+          <LabelSm style={{
+            fontSize: 8,
+            paddingLeft: 3,
+            opacity: 0.55,
+            color: colors.onSurfaceVariant,
+          }}>4h</LabelSm>
         </View>
 
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flex: 1 }}>
-          <View style={heatStyles.grid}>
-            {weeks.map((wk, wi) => (
-              <View key={wi} style={heatStyles.col}>
-                {wk.map((d, di) => {
-                  const isToday = d === today;
-                  const level = d ? heatLevel(countByDate[d] ?? 0) : -1;
-                  return (
-                    <View
-                      key={di}
-                      style={[
-                        heatStyles.cell,
-                        { backgroundColor: d ? HEAT_COLORS[level as 0|1|2|3|4] : 'transparent' },
-                        isToday && { borderWidth: 1.5, borderColor: colors.onSurface },
-                      ]}
-                    />
-                  );
-                })}
-              </View>
-            ))}
-          </View>
-        </ScrollView>
+        {/* Bars — absolutely fill the chart area, grow from the bottom */}
+        <View style={{
+          position: 'absolute',
+          bottom: 0, left: 0, right: 0,
+          height: BAR_AREA_H,
+          flexDirection: 'row',
+          alignItems: 'flex-end',
+          gap: GAP,
+        }}>
+          {days.map((date) => {
+            const mins = minutesByDate[date] ?? 0;
+            // barH: proportional to 8h goal, minimum 2px (shows the day exists)
+            const barH = Math.max((mins / MAX_MINUTES) * BAR_AREA_H, mins > 0 ? 5 : 2);
+            const isToday = date === today;
+
+            // Color ramp: empty → faint → mid → strong → full primary
+            const barColor = isToday
+              ? colors.primary
+              : mins === 0  ? `${colors.outlineVariant}40`
+              : mins < 90  ? `${colors.primary}28`  // < 1.5h
+              : mins < 240 ? `${colors.primary}58`  // 1.5–4h
+              : mins < 360 ? `${colors.primary}85`  // 4–6h
+              : `${colors.primary}b0`;              // 6h+
+
+            return (
+              <View
+                key={date}
+                style={{
+                  flex: 1,
+                  height: barH,
+                  backgroundColor: barColor,
+                  borderRadius: 3,
+                  ...(isToday && {
+                    shadowColor: colors.primary,
+                    shadowOpacity: 0.4,
+                    shadowRadius: 5,
+                    elevation: 4,
+                  }),
+                }}
+              />
+            );
+          })}
+        </View>
       </View>
 
-      <View style={heatStyles.legend}>
-        <LabelSm style={{ fontSize: 9, color: colors.onSurfaceVariant }}>Less</LabelSm>
-        {HEAT_COLORS.map((c, i) => (
-          <View key={i} style={[heatStyles.cell, { backgroundColor: c }]} />
-        ))}
-        <LabelSm style={{ fontSize: 9, color: colors.onSurfaceVariant }}>More</LabelSm>
+      {/* ── Day labels — SEPARATE row below the chart, no overflow issues ── */}
+      <View style={{
+        flexDirection: 'row',
+        gap: GAP,
+        marginTop: 5,
+      }}>
+        {days.map((date) => {
+          const isToday = date === today;
+          const d = new Date(date + 'T00:00:00');
+          const isWeekend = [0, 6].includes(d.getDay());
+          const dayLetter = d.toLocaleDateString('en-US', { weekday: 'narrow' });
+
+          return (
+            <View key={date} style={{ flex: 1, alignItems: 'center' }}>
+              <LabelSm style={{
+                fontSize: 8,
+                color: isToday
+                  ? colors.primary
+                  : isWeekend
+                    ? colors.outline
+                    : colors.onSurfaceVariant,
+                fontWeight: isToday ? '700' : '400',
+              }}>
+                {dayLetter}
+              </LabelSm>
+              {isToday && (
+                <View style={{
+                  width: 3, height: 3,
+                  borderRadius: 1.5,
+                  backgroundColor: colors.primary,
+                  marginTop: 1,
+                }} />
+              )}
+            </View>
+          );
+        })}
+      </View>
+
+      {/* ── Footer ──────────────────────────────────────────────────── */}
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: spacing.xs }}>
+        <LabelSm style={{ fontSize: 9, color: colors.onSurfaceVariant }}>2 weeks ago</LabelSm>
+        <LabelSm style={{ fontSize: 9, color: colors.primary }}>Today</LabelSm>
       </View>
     </View>
   );
 }
-
-const heatStyles = StyleSheet.create({
-  monthRow: { flexDirection: 'row', height: 14, marginBottom: 4 },
-  dayLabels: { width: 14, gap: 3, marginRight: 3 },
-  grid: { flexDirection: 'row', gap: 3 },
-  col: { gap: 3 },
-  cell: { width: 11, height: 11, borderRadius: 2 },
-  legend: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-    gap: 3,
-    marginTop: spacing.sm,
-  },
-});
 
 // ── Burnout — multi-signal algorithm ─────────────────────────────────────────
 type Risk = 'Low' | 'Moderate' | 'High';
 
 interface BurnoutResult {
   risk: Risk;
-  avgActiveHours: number;   // avg over days that HAVE events
-  heavyDays: number;        // days with >5h scheduled
-  maxBlockMinutes: number;  // longest unbroken scheduled block this week
+  avgActiveHours: number;
+  heavyDays: number;
+  maxBlockMinutes: number;
   daysWithData: number;
   recommendations: string[];
 }
@@ -358,35 +315,29 @@ function computeBurnout(
   if (minutesPerDay.length === 0) return empty;
 
   const daysWithData = minutesPerDay.length;
-  // Average over ACTIVE days only — more honest than dividing by 7
   const totalMins = minutesPerDay.reduce((s, d) => s + d.minutes, 0);
   const avgActiveHours = totalMins / 60 / daysWithData;
-
-  // Days with >5 scheduled hours (heavy load indicator)
   const heavyDays = minutesPerDay.filter(d => d.minutes > 300).length;
-
-  // Longest single unbroken block across the whole week
   const maxBlockMinutes = maxBlockPerDay.reduce((m, d) => Math.max(m, d.block), 0);
 
-  // ── Decision tree: any one signal can escalate risk ──
   const isHigh =
-    avgActiveHours > 6 ||     // avg active day > 6h
-    heavyDays >= 4 ||          // 4+ heavy days this week
-    maxBlockMinutes >= 210;    // 3.5h+ unbroken block
+    avgActiveHours > 6 ||
+    heavyDays >= 4 ||
+    maxBlockMinutes >= 210;
 
   const isModerate =
     avgActiveHours > 3.5 ||
     heavyDays >= 2 ||
-    maxBlockMinutes >= 105;    // 1.75h+ unbroken block
+    maxBlockMinutes >= 105;
 
   if (isHigh) {
     const recs: string[] = [];
     if (maxBlockMinutes >= 210)
-      recs.push(`Your longest unbroken block was ${Math.round(maxBlockMinutes / 60 * 10) / 10}h — schedule a break every 90 minutes.`);
+      recs.push(`Longest unbroken block: ${(maxBlockMinutes / 60).toFixed(1)}h — take a break every 90 minutes.`);
     if (heavyDays >= 4)
-      recs.push(`${heavyDays} out of 7 days had 5+ hours scheduled. Protect at least 2 light days per week.`);
+      recs.push(`${heavyDays}/7 days had 5+ hours scheduled. Protect at least 2 lighter days.`);
     if (avgActiveHours > 6)
-      recs.push('Keep at least one morning per week completely event-free for recovery.');
+      recs.push('Keep one morning per week completely free for mental recovery.');
     recs.push('Defer non-urgent tasks to next week — protect your energy.');
     return { risk: 'High', avgActiveHours, heavyDays, maxBlockMinutes, daysWithData, recommendations: recs };
   }
@@ -394,9 +345,9 @@ function computeBurnout(
   if (isModerate) {
     const recs: string[] = [];
     if (maxBlockMinutes >= 105)
-      recs.push(`Longest unbroken block: ${Math.round(maxBlockMinutes / 60 * 10) / 10}h. Add a midday recovery gap.`);
+      recs.push(`Longest block: ${(maxBlockMinutes / 60).toFixed(1)}h. Add a midday recovery gap.`);
     if (heavyDays >= 2)
-      recs.push(`${heavyDays} days with 5+ hours — consider spacing out heavy days.`);
+      recs.push(`${heavyDays} heavy days — consider spacing them out.`);
     recs.push('Protect the last hour of each day from new commitments.');
     return { risk: 'Moderate', avgActiveHours, heavyDays, maxBlockMinutes, daysWithData, recommendations: recs };
   }
@@ -413,40 +364,42 @@ export default function AIScreen() {
   const colors = useThemeColors();
   const router = useRouter();
   const today = todayISO();
-  const tenWeeksAgo = subtractDays(today, 69);
   const weekAgo = subtractDays(today, 6);
+  const fourteenDaysAgo = subtractDays(today, 13);
 
-  // ── Today's Activity Rings data ────────────────────────────────────────────
-  const todayStats = useMemo(() => getTodayEventStats(today), [today]);
+  // refreshKey increments on every tab focus so all memos recompute with fresh DB data
+  const [refreshKey, setRefreshKey] = useState(0);
+  useFocusEffect(useCallback(() => {
+    setRefreshKey(k => k + 1);
+  }, []));
 
-  // ── Heatmap: completed events per day ─────────────────────────────────────
-  const completedCounts = useMemo(() => {
-    const rows = getCompletedEventCountPerDay(tenWeeksAgo, today);
-    return Object.fromEntries(rows.map(r => [r.date, r.count]));
-  }, [today, tenWeeksAgo]);
+  // ── Today's Activity ────────────────────────────────────────────────────────
+  const todayStats = useMemo(() => getTodayEventStats(today), [today, refreshKey]);
 
-  // ── Burnout: scheduled minutes + longest block per day this week ───────────
+  // ── Daily Momentum (14-day scheduled hours bar chart) ──────────────────────
+  const momentumMinutes = useMemo(() => {
+    const rows = getScheduledMinutesPerDay(fourteenDaysAgo, today);
+    return Object.fromEntries(rows.map(r => [r.date, r.minutes]));
+  }, [today, fourteenDaysAgo, refreshKey]);
+
+  // ── Burnout: last 7 days ────────────────────────────────────────────────────
   const burnout = useMemo(() => {
     const mins = getScheduledMinutesPerDay(weekAgo, today);
-    // Compute longest block for each day that has data
     const blockPerDay = mins.map(d => ({
       date: d.date,
       block: getLongestContinuousBlockMinutes(d.date),
     }));
     return computeBurnout(mins, blockPerDay);
-  }, [weekAgo, today]);
+  }, [weekAgo, today, refreshKey]);
 
-  // ── FAB / download ────────────────────────────────────────────────────────
+  // ── FAB ───────────────────────────────────────────────────────────────────
   const [downloadDialog, setDownloadDialog] = useState(false);
   const llama = useLlama();
   const { isDownloaded, isDownloading, startDownload } = llama;
 
   const handleFABPress = useCallback(() => {
-    if (!isDownloaded && !isDownloading) {
-      setDownloadDialog(true);
-    } else if (isDownloaded) {
-      router.push('/chat' as any);
-    }
+    if (!isDownloaded && !isDownloading) setDownloadDialog(true);
+    else if (isDownloaded) router.push('/chat' as any);
   }, [isDownloaded, isDownloading, router]);
 
   const RISK_COLOR: Record<Risk, string> = {
@@ -460,9 +413,8 @@ export default function AIScreen() {
     High: 'fire',
   };
 
-  // ── Ring definitions ───────────────────────────────────────────────────────
-  // Goal: 8 scheduled hours for outer ring
-  const HOUR_GOAL = 8 * 60; // minutes
+  // ── Ring definitions ────────────────────────────────────────────────────────
+  const HOUR_GOAL = 8 * 60;
   const scheduledProgress = todayStats.scheduledMinutes / HOUR_GOAL;
   const completionProgress = todayStats.total > 0 ? todayStats.completed / todayStats.total : 0;
   const focusProgress = todayStats.focusTotal > 0 ? todayStats.focusCompleted / todayStats.focusTotal : 0;
@@ -477,8 +429,7 @@ export default function AIScreen() {
       value: scheduledProgress,
       color: colors.primary,
       trackColor: `${colors.primary}18`,
-      radius: 76,
-      strokeWidth: 12,
+      radius: 76, strokeWidth: 12,
       label: 'Scheduled',
       detail: scheduledHoursLabel,
     },
@@ -486,8 +437,7 @@ export default function AIScreen() {
       value: completionProgress,
       color: colors.secondary,
       trackColor: `${colors.secondary}20`,
-      radius: 58,
-      strokeWidth: 11,
+      radius: 58, strokeWidth: 11,
       label: 'Completed',
       detail: `${todayStats.completed}/${todayStats.total}`,
     },
@@ -495,8 +445,7 @@ export default function AIScreen() {
       value: focusProgress,
       color: colors.tertiary,
       trackColor: `${colors.tertiary}22`,
-      radius: 41,
-      strokeWidth: 10,
+      radius: 41, strokeWidth: 10,
       label: 'Focus done',
       detail: `${todayStats.focusCompleted}/${todayStats.focusTotal}`,
     },
@@ -512,8 +461,7 @@ export default function AIScreen() {
         contentContainerStyle={[styles.content, { paddingBottom: 120 + insets.bottom }]}
         showsVerticalScrollIndicator={false}
       >
-
-        {/* ── Activity Rings card ───────────────────────────────────────────── */}
+        {/* ── Today's Activity ─────────────────────────────────────────────── */}
         <View style={[styles.card, { backgroundColor: colors.surfaceContainerLowest, borderColor: colors.outlineVariant }]}>
           <View style={styles.cardHeader}>
             <View>
@@ -526,7 +474,6 @@ export default function AIScreen() {
               </View>
             )}
           </View>
-
           <ActivityRingsWidget
             rings={rings}
             centerLabel={scheduledHoursLabel}
@@ -534,21 +481,15 @@ export default function AIScreen() {
           />
         </View>
 
-        {/* ── Workload Heatmap card ─────────────────────────────────────────── */}
+        {/* ── Daily Momentum card ───────────────────────────────────────────── */}
         <View style={[styles.card, { backgroundColor: colors.surfaceContainerLowest, borderColor: colors.outlineVariant }]}>
           <View style={styles.cardHeader}>
             <View>
-              <LabelMd color={colors.onSurface}>Workload Consistency</LabelMd>
-              <LabelSm color={colors.onSurfaceVariant}>Completed events per day · 10 weeks</LabelSm>
+              <LabelMd color={colors.onSurface}>Daily Momentum</LabelMd>
+              <LabelSm color={colors.onSurfaceVariant}>Scheduled hours · last 14 days</LabelSm>
             </View>
           </View>
-
-          <WorkloadHeatmap countByDate={completedCounts} />
-
-          <View style={styles.heatFooter}>
-            <LabelSm color={colors.onSurfaceVariant} style={{ fontSize: 9 }}>10 wks ago</LabelSm>
-            <LabelSm color={colors.onSurfaceVariant} style={{ fontSize: 9 }}>Today</LabelSm>
-          </View>
+          <DailyMomentumChart minutesByDate={momentumMinutes} />
         </View>
 
         {/* ── Burnout Risk card ─────────────────────────────────────────────── */}
@@ -568,13 +509,12 @@ export default function AIScreen() {
             </View>
           </View>
 
-          {/* Stats row */}
           <View style={[styles.burnoutStats, { borderColor: colors.outlineVariant }]}>
             <View style={styles.burnoutStat}>
-              <LabelMd style={[styles.statNum, { color: colors.onSurface }]}>
+              <LabelMd style={[styles.statNum, { color: burnout.avgActiveHours > 6 ? colors.error : colors.onSurface }]}>
                 {burnout.avgActiveHours.toFixed(1)}h
               </LabelMd>
-              <LabelSm color={colors.onSurfaceVariant} style={styles.statLabel}>avg/active day</LabelSm>
+              <LabelSm color={colors.onSurfaceVariant} style={styles.statLabel}>avg / active day</LabelSm>
             </View>
             <View style={[styles.statDivider, { backgroundColor: colors.outlineVariant }]} />
             <View style={styles.burnoutStat}>
@@ -595,7 +535,9 @@ export default function AIScreen() {
           </View>
 
           <LabelSm color={colors.onSurfaceVariant} style={styles.avgLine}>
-            Based on {burnout.daysWithData} day{burnout.daysWithData !== 1 ? 's' : ''} of data this week
+            {burnout.daysWithData === 0
+              ? 'No scheduled events this week'
+              : `Based on ${burnout.daysWithData} day${burnout.daysWithData !== 1 ? 's' : ''} of data this week`}
           </LabelSm>
 
           <View style={[styles.recoBox, { backgroundColor: colors.surfaceContainerLow, borderColor: colors.outlineVariant }]}>
@@ -666,7 +608,6 @@ export default function AIScreen() {
   );
 }
 
-// ── Styles ────────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   root: { flex: 1 },
   content: { paddingHorizontal: spacing.marginMobile, paddingTop: spacing.lg },
@@ -688,11 +629,6 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: radius.full,
     borderWidth: 1,
-  },
-  heatFooter: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: spacing.xs,
   },
 
   // Burnout
@@ -722,20 +658,9 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
     gap: 2,
   },
-  statNum: {
-    fontSize: 20,
-    fontWeight: '700',
-    lineHeight: 24,
-  },
-  statLabel: {
-    fontSize: 10,
-    textAlign: 'center',
-    opacity: 0.7,
-  },
-  statDivider: {
-    width: 1,
-    marginVertical: spacing.sm,
-  },
+  statNum: { fontSize: 20, fontWeight: '700', lineHeight: 24 },
+  statLabel: { fontSize: 10, textAlign: 'center', opacity: 0.7 },
+  statDivider: { width: 1, marginVertical: spacing.sm },
   avgLine: { marginBottom: spacing.md, fontSize: 11, opacity: 0.7 },
   recoBox: {
     borderRadius: radius.md,
@@ -745,7 +670,7 @@ const styles = StyleSheet.create({
   },
   recoRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 2 },
 
-  // FAB pill
+  // FAB
   fabContainer: {
     position: 'absolute',
     right: spacing.marginMobile,
