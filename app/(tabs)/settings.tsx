@@ -1,18 +1,20 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, ScrollView, TouchableOpacity,
-  StyleSheet, Switch,
+  StyleSheet, Switch, ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 
-import { HeadlineMd, BodyMd, LabelMd, LabelSm } from '@/components/ui/Typography';
+import { HeadlineMd, LabelMd, LabelSm } from '@/components/ui/Typography';
 import { ScreenHeader } from '@/components/ui/ScreenHeader';
 import { Dialog } from '@/components/ui/Dialog';
-import { colors as staticColors, spacing, radius } from '@/theme/tokens';
+import { spacing, radius } from '@/theme/tokens';
 import { getDb } from '@/db/client';
 import { useLlama } from '@/hooks/useLlama';
+import type { ModelDef, ModelState } from '@/hooks/useLlama';
+import { getModelSizeOnDisk } from '@/services/llamaService';
 import { useTheme } from '@/theme/ThemeContext';
 import { useThemeColors } from '@/theme/ThemeContext';
 import type { ThemePref } from '@/theme/ThemeContext';
@@ -66,6 +68,195 @@ function Divider() {
   return <View style={[styles.divider, { backgroundColor: `${colors.outlineVariant}80` }]} />;
 }
 
+// ── ModelSettingsCard ──────────────────────────────────────────────────────────
+// Inline card for a single model inside the Settings AI Models group.
+function ModelSettingsCard({
+  def,
+  state,
+  sizeOnDisk,
+  onDownload,
+  onCancel,
+  onDelete,
+}: {
+  def: ModelDef;
+  state: ModelState;
+  sizeOnDisk: number;  // bytes; 0 if not downloaded
+  onDownload: () => void;
+  onCancel: () => void;
+  onDelete: () => void;
+}) {
+  const colors = useThemeColors();
+
+  const sizeLabel = sizeOnDisk > 0
+    ? `${(sizeOnDisk / 1_000_000).toFixed(1)} MB on disk`
+    : def.sizeLabel;
+
+  return (
+    <View style={[modelCardStyles.card, { borderColor: `${colors.outlineVariant}60` }]}>
+
+      {/* Title row */}
+      <View style={modelCardStyles.titleRow}>
+        <MaterialCommunityIcons name="robot-outline" size={18} color={colors.primary} />
+        <View style={{ flex: 1, marginLeft: 10 }}>
+          <View style={modelCardStyles.nameRow}>
+            <LabelMd color={colors.onSurface}>{def.name}</LabelMd>
+            <View style={[modelCardStyles.tag, { backgroundColor: `${colors.primary}18` }]}>
+              <LabelSm style={{ fontSize: 10, color: colors.primary }}>{def.tag}</LabelSm>
+            </View>
+          </View>
+          <LabelSm style={{ color: colors.onSurfaceVariant, marginTop: 1 }}>
+            {def.description}
+          </LabelSm>
+        </View>
+      </View>
+
+      {/* Status + size */}
+      <View style={modelCardStyles.statusRow}>
+        {state.isDownloaded ? (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+            <MaterialCommunityIcons name="check-circle-outline" size={13} color={colors.primary} />
+            <LabelSm style={{ fontSize: 11, color: colors.primary }}>Downloaded</LabelSm>
+            <LabelSm style={{ fontSize: 11, color: colors.onSurfaceVariant }}>
+              · {sizeLabel}
+            </LabelSm>
+          </View>
+        ) : state.isDownloading ? null : (
+          <LabelSm style={{ fontSize: 11, color: colors.onSurfaceVariant }}>
+            Not downloaded · {def.sizeLabel}
+          </LabelSm>
+        )}
+      </View>
+
+      {/* Progress bar (downloading) */}
+      {state.isDownloading && (
+        <View style={{ marginTop: 8 }}>
+          <View style={[modelCardStyles.progressTrack, { backgroundColor: `${colors.outlineVariant}40` }]}>
+            <View
+              style={[
+                modelCardStyles.progressFill,
+                { width: `${state.downloadProgress}%` as any, backgroundColor: colors.primary },
+              ]}
+            />
+          </View>
+          <View style={modelCardStyles.progressRow}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+              <ActivityIndicator size={11} color={colors.primary} />
+              <LabelSm style={{ fontSize: 11, color: colors.primary }}>
+                Downloading {state.downloadProgress}%
+              </LabelSm>
+            </View>
+            <TouchableOpacity onPress={onCancel}>
+              <LabelSm style={{ fontSize: 11, color: colors.error }}>Cancel</LabelSm>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {/* Download error */}
+      {state.downloadError && (
+        <LabelSm style={{ fontSize: 11, color: colors.error, marginTop: 6 }}>
+          ⚠ {state.downloadError}
+        </LabelSm>
+      )}
+
+      {/* Action buttons */}
+      <View style={modelCardStyles.actionRow}>
+        {/* Download button (not downloaded, not in progress) */}
+        {!state.isDownloaded && !state.isDownloading && (
+          <TouchableOpacity
+            id={`download-${def.id}`}
+            style={[modelCardStyles.btn, { backgroundColor: colors.primary }]}
+            onPress={onDownload}
+            activeOpacity={0.8}
+          >
+            <MaterialCommunityIcons name="download-outline" size={13} color={colors.onPrimary} />
+            <LabelSm style={{ color: colors.onPrimary, marginLeft: 4, fontWeight: '600' }}>
+              Download {def.sizeLabel}
+            </LabelSm>
+          </TouchableOpacity>
+        )}
+
+        {/* Retry (error state) */}
+        {state.downloadError && !state.isDownloading && (
+          <TouchableOpacity
+            id={`retry-${def.id}`}
+            style={[modelCardStyles.btn, { backgroundColor: `${colors.primary}20`, borderWidth: 1, borderColor: `${colors.primary}40` }]}
+            onPress={onDownload}
+            activeOpacity={0.8}
+          >
+            <LabelSm style={{ color: colors.primary }}>Retry</LabelSm>
+          </TouchableOpacity>
+        )}
+
+        {/* Delete button (downloaded) */}
+        {state.isDownloaded && (
+          <TouchableOpacity
+            id={`delete-${def.id}`}
+            style={[modelCardStyles.btn, { backgroundColor: `${colors.errorContainer}55`, borderWidth: 1, borderColor: `${colors.error}40` }]}
+            onPress={onDelete}
+            activeOpacity={0.8}
+          >
+            <MaterialCommunityIcons name="delete-outline" size={13} color={colors.error} />
+            <LabelSm style={{ color: colors.error, marginLeft: 4 }}>Delete</LabelSm>
+          </TouchableOpacity>
+        )}
+      </View>
+    </View>
+  );
+}
+
+const modelCardStyles = StyleSheet.create({
+  card: {
+    padding: spacing.md,
+    borderBottomWidth: 1,
+  },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  nameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  tag: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: radius.full,
+  },
+  statusRow: {
+    marginTop: 6,
+    marginLeft: 28,
+  },
+  progressTrack: {
+    height: 4,
+    borderRadius: 2,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: 4,
+    borderRadius: 2,
+  },
+  progressRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 4,
+  },
+  actionRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginTop: 10,
+    marginLeft: 28,
+  },
+  btn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.full,
+  },
+});
+
 // ── Screen ─────────────────────────────────────────────────────────────────────
 export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
@@ -77,14 +268,34 @@ export default function SettingsScreen() {
   const [timeFmt, setTimeFmtLocal] = useState<TimeFormat>('24h');
   const { setTimeFmt: setTimeFmtCtx } = useTimeFormatCtx();
   const [notifEnabled, setNotifEnabled] = useState(false);
-  const [removeDialog, setRemoveDialog] = useState(false);
   const [clearDialog, setClearDialog] = useState(false);
   const [toast, setToast] = useState('');
+
+  // Per-model delete: which model ID is pending confirmation (null = none)
+  const [deleteDialogModelId, setDeleteDialogModelId] = useState<string | null>(null);
+
+  // On-disk sizes fetched asynchronously for display
+  const [modelSizes, setModelSizes] = useState<Record<string, number>>({});
 
   useEffect(() => {
     setTimeFmtLocal(getTimeFormatPref());
     setNotifEnabled(getNotificationEnabled());
   }, []);
+
+  // Fetch on-disk sizes whenever download state changes
+  useEffect(() => {
+    (async () => {
+      const sizes: Record<string, number> = {};
+      for (const m of llama.models) {
+        if (llama.modelStates[m.id]?.isDownloaded) {
+          sizes[m.id] = await getModelSizeOnDisk(m.id);
+        } else {
+          sizes[m.id] = 0;
+        }
+      }
+      setModelSizes(sizes);
+    })();
+  }, [llama.modelStates, llama.models]);
 
   // ── Theme ──
   const cycleTheme = () => {
@@ -96,7 +307,7 @@ export default function SettingsScreen() {
   const toggleTimeFmt = () => {
     const next: TimeFormat = timeFmt === '24h' ? '12h' : '24h';
     setTimeFmtLocal(next);
-    setTimeFmtCtx(next); // updates context (saves to DB + notifies all consumers)
+    setTimeFmtCtx(next);
   };
 
   // ── Notifications ──
@@ -122,15 +333,18 @@ export default function SettingsScreen() {
     }
   };
 
-  // ── AI model ──
-  const handleModelDownload = () => {
-    llama.startDownload();
-  };
+  // ── Model delete (confirmed) ──
+  const handleConfirmDelete = useCallback(async () => {
+    if (!deleteDialogModelId) return;
+    const modelId = deleteDialogModelId;
+    setDeleteDialogModelId(null);
+    await llama.deleteModel(modelId);
+    // Clear cached size
+    setModelSizes((prev) => ({ ...prev, [modelId]: 0 }));
+  }, [deleteDialogModelId, llama]);
 
-  const handleModelRemove = () => setRemoveDialog(true);
-
-  // ── Clear imported events ──
-  const handleClearImported = () => setClearDialog(true);
+  // Derive dialog model def for the confirmation message
+  const deleteTargetDef = llama.models.find((m) => m.id === deleteDialogModelId);
 
   return (
     <View style={[styles.root, { backgroundColor: colors.background }]}>
@@ -140,19 +354,17 @@ export default function SettingsScreen() {
         contentContainerStyle={[styles.content, { paddingBottom: 100 + insets.bottom }]}
         showsVerticalScrollIndicator={false}
       >
-        {/* Toast for notifications feedback */}
+        {/* Toast */}
         {!!toast && (
           <View style={[styles.toast, { backgroundColor: colors.onSurface }]}>
             <LabelSm color={colors.surface}>{toast}</LabelSm>
           </View>
         )}
 
-        <HeadlineMd style={styles.sectionTitle}>Preferences</HeadlineMd>
-
         {/* ── Preferences group ── */}
+        <HeadlineMd style={styles.sectionTitle}>Preferences</HeadlineMd>
         <View style={[styles.group, { backgroundColor: colors.surfaceContainerLowest, borderColor: colors.outlineVariant }]}>
 
-          {/* Notifications */}
           <SettingsRow
             icon="bell-outline"
             label="Daily Reminder"
@@ -167,7 +379,6 @@ export default function SettingsScreen() {
           />
           <Divider />
 
-          {/* App Theme */}
           <SettingsRow
             icon="palette-outline"
             label="App Theme"
@@ -181,7 +392,6 @@ export default function SettingsScreen() {
           />
           <Divider />
 
-          {/* Time Format */}
           <SettingsRow
             icon="clock-outline"
             label="Time Format"
@@ -195,7 +405,6 @@ export default function SettingsScreen() {
           />
           <Divider />
 
-          {/* Privacy Policy — in-app */}
           <SettingsRow
             icon="shield-outline"
             label="Privacy Policy"
@@ -203,7 +412,6 @@ export default function SettingsScreen() {
           />
           <Divider />
 
-          {/* Help Center — in-app */}
           <SettingsRow
             icon="help-circle-outline"
             label="Help Center"
@@ -219,52 +427,38 @@ export default function SettingsScreen() {
           />
         </View>
 
-        {/* ── AI Model group ── */}
-        <HeadlineMd style={[styles.sectionTitle, { marginTop: spacing.xl }]}>AI Model</HeadlineMd>
+        {/* ── AI Models group ── */}
+        <HeadlineMd style={[styles.sectionTitle, { marginTop: spacing.xl }]}>AI Models</HeadlineMd>
+        <LabelSm style={[styles.sectionSub, { color: colors.onSurfaceVariant }]}>
+          One model loaded at a time. Both run fully offline on your device.
+        </LabelSm>
+
         <View style={[styles.group, { backgroundColor: colors.surfaceContainerLowest, borderColor: colors.outlineVariant }]}>
-          <View style={styles.row}>
-            <MaterialCommunityIcons name="brain" size={20} color={colors.outline} style={styles.rowIcon} />
-            <View style={{ flex: 1 }}>
-              <LabelMd color={colors.onSurface}>SmolLM2 360M</LabelMd>
-              <LabelSm color={colors.onSurfaceVariant}>Q4_K_M · ~200 MB · On-device</LabelSm>
-            </View>
+          {llama.models.map((def, idx) => (
+            <React.Fragment key={def.id}>
+              <ModelSettingsCard
+                def={def}
+                state={llama.modelStates[def.id] ?? {
+                  isDownloaded: false, isDownloading: false,
+                  downloadProgress: 0, downloadError: null,
+                }}
+                sizeOnDisk={modelSizes[def.id] ?? 0}
+                onDownload={() => llama.startDownload(def.id)}
+                onCancel={() => llama.cancelDownload(def.id)}
+                onDelete={() => setDeleteDialogModelId(def.id)}
+              />
+              {idx < llama.models.length - 1 && <Divider />}
+            </React.Fragment>
+          ))}
+        </View>
 
-            {llama.isDownloading ? (
-              <LabelSm color={colors.primary}>{llama.downloadProgress}%</LabelSm>
-            ) : llama.isDownloaded ? (
-              <TouchableOpacity onPress={handleModelRemove} style={[styles.chipBtn, { borderWidth: 1, borderColor: `${colors.error}55`, paddingHorizontal: spacing.sm, paddingVertical: 4, borderRadius: radius.full }]}>
-                <LabelSm color={colors.error}>Remove</LabelSm>
-              </TouchableOpacity>
-            ) : (
-              <TouchableOpacity onPress={handleModelDownload} style={[styles.downloadBtn, { backgroundColor: colors.primary }]}>
-                <MaterialCommunityIcons name="download" size={14} color={colors.onPrimary} />
-                <LabelSm color={colors.onPrimary}>Download</LabelSm>
-              </TouchableOpacity>
-            )}
-          </View>
-
-          {llama.isDownloading && (
-            <View style={[styles.progressWrap, { backgroundColor: `${colors.primaryContainer}55` }]}>
-              <View style={[styles.progressFill, { width: `${llama.downloadProgress}%` as any, backgroundColor: colors.primary }]} />
-            </View>
-          )}
-
-          {llama.downloadError ? (
-            <View style={[styles.row, { paddingTop: 0 }]}>
-              <LabelSm color={colors.error} style={{ flex: 1, paddingLeft: spacing.md }}>
-                ⚠ {llama.downloadError}
-              </LabelSm>
-              <TouchableOpacity onPress={llama.startDownload} style={{ marginRight: spacing.md }}>
-                <LabelSm color={colors.primary}>Retry</LabelSm>
-              </TouchableOpacity>
-            </View>
-          ) : null}
-
-          <Divider />
+        {/* ── Data group ── */}
+        <HeadlineMd style={[styles.sectionTitle, { marginTop: spacing.xl }]}>Data</HeadlineMd>
+        <View style={[styles.group, { backgroundColor: colors.surfaceContainerLowest, borderColor: colors.outlineVariant }]}>
           <SettingsRow
             icon="calendar-remove-outline"
             label="Clear Imported Events"
-            onPress={handleClearImported}
+            onPress={() => setClearDialog(true)}
             right={<MaterialCommunityIcons name="chevron-right" size={20} color={colors.error} />}
           />
         </View>
@@ -277,24 +471,23 @@ export default function SettingsScreen() {
         </View>
       </ScrollView>
 
-      {/* Remove model dialog */}
+      {/* ── Delete model confirmation ── */}
       <Dialog
-        visible={removeDialog}
-        title="Remove AI Model?"
-        message="This deletes the SmolLM2 model (~200 MB freed). You can re-download anytime."
+        visible={deleteDialogModelId !== null}
+        title={`Delete ${deleteTargetDef?.name ?? 'Model'}?`}
+        message={
+          deleteTargetDef
+            ? `This removes the ${deleteTargetDef.name} model (${deleteTargetDef.sizeLabel} freed). You can re-download it anytime.`
+            : ''
+        }
         actions={[
-          { label: 'Cancel', onPress: () => setRemoveDialog(false) },
-          {
-            label: 'Remove', destructive: true, onPress: () => {
-              llama.deleteModel();
-              setRemoveDialog(false);
-            }
-          },
+          { label: 'Cancel', onPress: () => setDeleteDialogModelId(null) },
+          { label: 'Delete', destructive: true, onPress: handleConfirmDelete },
         ]}
-        onDismiss={() => setRemoveDialog(false)}
+        onDismiss={() => setDeleteDialogModelId(null)}
       />
 
-      {/* Clear imported dialog */}
+      {/* ── Clear imported events confirmation ── */}
       <Dialog
         visible={clearDialog}
         title="Clear Imported Events?"
@@ -305,7 +498,7 @@ export default function SettingsScreen() {
             label: 'Clear', destructive: true, onPress: () => {
               getDb().runSync("DELETE FROM events WHERE source = 'imported'");
               setClearDialog(false);
-            }
+            },
           },
         ]}
         onDismiss={() => setClearDialog(false)}
@@ -314,10 +507,12 @@ export default function SettingsScreen() {
   );
 }
 
+// ── Styles ─────────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   root: { flex: 1 },
   content: { paddingHorizontal: spacing.marginMobile, paddingTop: spacing.lg },
-  sectionTitle: { marginBottom: spacing.sm },
+  sectionTitle: { marginBottom: spacing.xs },
+  sectionSub: { marginBottom: spacing.sm, fontSize: 12 },
   toast: {
     borderRadius: radius.full,
     paddingHorizontal: spacing.md,
@@ -341,22 +536,6 @@ const styles = StyleSheet.create({
   rowLabel: { flex: 1 },
   divider: { height: 1, marginLeft: spacing.md + 20 + spacing.md },
   chipBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  downloadBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 4,
-    borderRadius: radius.full,
-  },
-  progressWrap: {
-    height: 3,
-    marginHorizontal: spacing.md,
-    marginBottom: spacing.sm,
-    borderRadius: 2,
-    overflow: 'hidden',
-  },
-  progressFill: { height: 3, borderRadius: 2 },
   versionRow: {
     flexDirection: 'row',
     justifyContent: 'center',

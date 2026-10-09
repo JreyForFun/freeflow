@@ -393,14 +393,23 @@ export default function AIScreen() {
   }, [weekAgo, today, refreshKey]);
 
   // ── FAB ───────────────────────────────────────────────────────────────────
-  const [downloadDialog, setDownloadDialog] = useState(false);
   const llama = useLlama();
-  const { isDownloaded, isDownloading, startDownload } = llama;
+  // The model currently in-progress of downloading (if any)
+  const downloadingModel = llama.models.find((m) => llama.modelStates[m.id]?.isDownloading);
+  // True if at least one model is fully downloaded and ready
+  const anyDownloaded = llama.models.some((m) => llama.modelStates[m.id]?.isDownloaded);
+  // Def of the active model for label display
+  const activeModelDef = llama.models.find((m) => m.id === llama.activeModelId);
 
   const handleFABPress = useCallback(() => {
-    if (!isDownloaded && !isDownloading) setDownloadDialog(true);
-    else if (isDownloaded) router.push('/chat' as any);
-  }, [isDownloaded, isDownloading, router]);
+    if (anyDownloaded) {
+      router.push('/chat' as any);
+    } else if (!downloadingModel) {
+      // No model downloaded and none downloading — guide user to Settings
+      router.push('/settings' as any);
+    }
+    // If a download is in progress, tap is a no-op (user sees the progress bar)
+  }, [anyDownloaded, downloadingModel, router]);
 
   const RISK_COLOR: Record<Risk, string> = {
     Low: colors.secondary,
@@ -554,56 +563,56 @@ export default function AIScreen() {
       {/* ── AI pill FAB ──────────────────────────────────────────────────────── */}
       <View style={[styles.fabContainer, { bottom: 90 + insets.bottom }]}>
         <TouchableOpacity
+          id="ai-fab-btn"
           style={[
             styles.fabPill,
-            { backgroundColor: isDownloading ? colors.primaryContainer : colors.primary },
+            {
+              backgroundColor: downloadingModel
+                ? colors.primaryContainer
+                : anyDownloaded
+                  ? colors.primary
+                  : `${colors.primary}BB`,
+            },
           ]}
           onPress={handleFABPress}
           activeOpacity={0.85}
         >
-          {isDownloading && (
+          {/* Download progress fill behind FAB content */}
+          {downloadingModel && (
             <View
               style={[
                 StyleSheet.absoluteFillObject,
                 {
-                  width: `${llama.downloadProgress}%` as any,
+                  width: `${llama.modelStates[downloadingModel.id]?.downloadProgress ?? 0}%` as any,
                   backgroundColor: `${colors.primary}55`,
                   borderRadius: radius.full,
                 },
               ]}
             />
           )}
+
           <MaterialCommunityIcons
-            name={isDownloading ? 'download' : isDownloaded ? 'robot' : 'robot-outline'}
+            name={
+              downloadingModel ? 'download'
+              : anyDownloaded   ? 'robot'
+              : 'download-outline'
+            }
             size={20}
-            color={isDownloading ? colors.onPrimaryContainer : colors.onPrimary}
+            color={downloadingModel ? colors.onPrimaryContainer : colors.onPrimary}
           />
+
           <LabelMd
-            color={isDownloading ? colors.onPrimaryContainer : colors.onPrimary}
+            color={downloadingModel ? colors.onPrimaryContainer : colors.onPrimary}
             style={{ letterSpacing: 0.2 }}
           >
-            {isDownloading
-              ? `Downloading ${llama.downloadProgress}%`
-              : isDownloaded
-                ? 'Ask freeflow AI'
-                : 'Download AI Model (200MB)'}
+            {downloadingModel
+              ? `Downloading ${downloadingModel.tag} ${llama.modelStates[downloadingModel.id]?.downloadProgress ?? 0}%`
+              : anyDownloaded
+                ? `Ask freeflow AI · ${activeModelDef?.tag ?? 'AI'}`
+                : 'Download a model'}
           </LabelMd>
         </TouchableOpacity>
       </View>
-
-      <Dialog
-        visible={downloadDialog}
-        title="Download AI Model?"
-        message="SmolLM2 360M (~200 MB) will be downloaded over Wi-Fi and stored on your device. This is a one-time download."
-        actions={[
-          { label: 'Cancel', onPress: () => setDownloadDialog(false) },
-          {
-            label: 'Download', primary: true,
-            onPress: () => { setDownloadDialog(false); startDownload(); },
-          },
-        ]}
-        onDismiss={() => setDownloadDialog(false)}
-      />
     </View>
   );
 }
